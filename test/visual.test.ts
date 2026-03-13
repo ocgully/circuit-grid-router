@@ -290,7 +290,7 @@ describe('visual regression: SVG golden files', () => {
 
     resetIds();
     {
-      const src = N('Src', 2, 12, 6, 8);
+      const src = N('Src', 2, 12, 6, 11);
       const t1 = N('T1', 22, 1, 4, 4);
       const t2 = N('T2', 22, 7, 4, 4);
       const t3 = N('T3', 22, 13, 4, 4);

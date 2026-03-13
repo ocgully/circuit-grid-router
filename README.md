@@ -187,7 +187,7 @@ A central hub with 8 spokes at cardinal and intercardinal positions. The solver 
 ![Negotiated Compass](docs/images/neg-compass.svg)
 
 ### Connection Negotiation: Congested Side (1→5)
-One source node with 5 targets all to the right. Rather than cramming all connections onto the right side, the solver may negotiate top/bottom exits for the outermost targets.
+One large source node with 5 targets spread vertically to the right. Tests that connections are proportionally distributed across the source's right side so each edge exits near its closest target — no jumping over other edges to reach a far-away connection point.
 
 ![Negotiated Congested](docs/images/neg-congested.svg)
 

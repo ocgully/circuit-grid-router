@@ -216,10 +216,10 @@ function buildAll() {
 
   resetIds();
   {
-    const src2 = N('Src',2,12,6,8);
+    const src2 = N('Src',2,12,6,11);
     const t1b = N('T1',22,1,4,4), t2b = N('T2',22,7,4,4), t3b = N('T3',22,13,4,4), t4b = N('T4',22,19,4,4), t5b = N('T5',22,25,4,4);
     t7.push({
-      id:'neg-congested', title:'Congested Side (1→5)', desc:'5 targets on same side — negotiation spreads connections',
+      id:'neg-congested', title:'Congested Side (1→5)', desc:'5 targets spread vertically — each edge exits its closest connection point',
       nodes:[src2,t1b,t2b,t3b,t4b,t5b],
       edges:[E(src2.id,t1b.id),E(src2.id,t2b.id),E(src2.id,t3b.id),E(src2.id,t4b.id),E(src2.id,t5b.id)],
     });
