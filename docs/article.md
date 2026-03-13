@@ -158,6 +158,26 @@ This means you can use it with:
 
 The `waypointsToSvgPath()` helper is a convenience — it converts waypoints to an SVG `M/L` path string, but it's a one-liner you could write yourself.
 
+## Scaling Up: 50 and 100 Nodes
+
+Everything above works great for small diagrams. But how does it hold up when things get complicated?
+
+### Mind Map (50 Nodes)
+
+A central hub connected to 25 satellites, each with their own child nodes — 50 nodes total, 49 edges. The hub node needs connections on all four sides, and the negotiated router must distribute them without conflict.
+
+![Mind Map — 50 nodes with a 25-connection central hub](images/mindmap.svg)
+
+The connection distribution algorithm handles the hub's 25 connections by spreading them across all four sides, wrapping to adjacent sides when one fills up. The negotiated router resolves routing conflicts between the dense spokes radiating outward.
+
+### Mega Grid (100 Nodes)
+
+The ultimate stress test: a 10×10 grid of nodes with 180 edges (every node connects to its right and bottom neighbor). This creates dense parallel corridors, heavy crossing traffic, and pushes the auto-coarsening system.
+
+![Mega Grid — 100 nodes, 180 edges](images/mega-grid.svg)
+
+At 100 nodes on a 118×118 grid (~14,000 cells), the negotiated router converges in a handful of iterations. The auto-coarsening system keeps the grid manageable, and the binary heap A* ensures pathfinding stays fast even at this scale.
+
 ## Results
 
 The test suite includes 30 scenarios across 8 tiers of complexity, from basic 2-node layouts to a 100-node stress test and a 50-node mind map with a 25-connection hub.

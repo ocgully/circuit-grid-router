@@ -176,6 +176,16 @@ Sequential chain of four nodes.
 
 ![Chain](docs/images/chain.svg)
 
+### Mind Map (50 Nodes)
+A central hub with 25 direct connections, surrounded by satellite clusters. Demonstrates connection distribution under heavy load and negotiated routing at scale.
+
+![Mind Map — 50 nodes](docs/images/mindmap.svg)
+
+### Mega Grid (100 Nodes)
+10×10 grid of nodes with 180 edges (horizontal + vertical neighbors). The ultimate stress test for negotiated congestion routing — dense parallel corridors, heavy crossing traffic, and auto-coarsening at work.
+
+![Mega Grid — 100 nodes](docs/images/mega-grid.svg)
+
 ## Visual Test Harness
 
 The repo includes a browser-based diagnostic page for testing routing scenarios interactively.
