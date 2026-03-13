@@ -381,6 +381,12 @@ function placeEdgePath(grid, edgeId, path, dirs, cong) {
         }
     }
 }
+function pathToCellSet(path) {
+    const set = new Set();
+    for (const p of path)
+        set.add(`${p.col}:${p.row}`);
+    return set;
+}
 function clearEdgeCells(grid, dirs) {
     for (let r = 0; r < grid.rows; r++) {
         for (let c = 0; c < grid.cols; c++) {
@@ -443,11 +449,13 @@ export function buildScenarioNegotiated(nodes, edges, padding = 2) {
     const dirs = createDirTracker();
     const cong = createCongestion();
     let finalNegotiations = 1;
+    const paths = new Map();
     for (let iteration = 0; iteration < MAX_NEGOTIATION_ITERATIONS; iteration++) {
         finalNegotiations = iteration + 1;
         // Clear previous routing
         clearEdgeCells(grid, dirs);
         resetPresent(cong);
+        paths.clear();
         // Route ALL edges with current congestion costs
         for (const e of edges) {
             const ep = connByEdge.get(e.id);
@@ -456,6 +464,7 @@ export function buildScenarioNegotiated(nodes, edges, padding = 2) {
             const path = negotiatedAstar(grid, ep.src.col, ep.src.row, ep.src.side, ep.tgt.col, ep.tgt.row, ep.tgt.side, dirs, cong, iteration, e.id);
             if (path) {
                 placeEdgePath(grid, e.id, path, dirs, cong);
+                paths.set(e.id, { edgeId: e.id, cells: path, cellSet: pathToCellSet(path) });
             }
         }
         // Check convergence: no cell shared by >1 edge in same direction
@@ -465,6 +474,6 @@ export function buildScenarioNegotiated(nodes, edges, padding = 2) {
         // Update history costs for overused cells
         updateHistory(cong, HISTORY_INCREMENT);
     }
-    return { grid, nodes, edges, connections, negotiations: finalNegotiations, timeMs: performance.now() - t0 };
+    return { grid, nodes, edges, connections, paths, negotiations: finalNegotiations, timeMs: performance.now() - t0 };
 }
 //# sourceMappingURL=negotiated.js.map

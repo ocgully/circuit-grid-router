@@ -20,7 +20,7 @@
  */
 
 import type {
-  Grid2D, GridCell, CellType, NodeDef, EdgeDef, ConnectionPoint, ScenarioResult,
+  Grid2D, GridCell, CellType, NodeDef, EdgeDef, ConnectionPoint, ScenarioResult, EdgePath,
 } from './grid2d.js';
 import {
   createGrid, getCell, setCell, distributeConnections,
@@ -446,6 +446,12 @@ function placeEdgePath(
   }
 }
 
+function pathToCellSet(path: { col: number; row: number }[]): Set<string> {
+  const set = new Set<string>();
+  for (const p of path) set.add(`${p.col}:${p.row}`);
+  return set;
+}
+
 function clearEdgeCells(grid: Grid2D, dirs: EdgeDirTracker): void {
   for (let r = 0; r < grid.rows; r++) {
     for (let c = 0; c < grid.cols; c++) {
@@ -515,6 +521,7 @@ export function buildScenarioNegotiated(
   const dirs = createDirTracker();
   const cong = createCongestion();
   let finalNegotiations = 1;
+  const paths = new Map<number, EdgePath>();
 
   for (let iteration = 0; iteration < MAX_NEGOTIATION_ITERATIONS; iteration++) {
     finalNegotiations = iteration + 1;
@@ -522,6 +529,7 @@ export function buildScenarioNegotiated(
     // Clear previous routing
     clearEdgeCells(grid, dirs);
     resetPresent(cong);
+    paths.clear();
 
     // Route ALL edges with current congestion costs
     for (const e of edges) {
@@ -537,6 +545,7 @@ export function buildScenarioNegotiated(
 
       if (path) {
         placeEdgePath(grid, e.id, path, dirs, cong);
+        paths.set(e.id, { edgeId: e.id, cells: path, cellSet: pathToCellSet(path) });
       }
     }
 
@@ -548,5 +557,5 @@ export function buildScenarioNegotiated(
     updateHistory(cong, HISTORY_INCREMENT);
   }
 
-  return { grid, nodes, edges, connections, negotiations: finalNegotiations, timeMs: performance.now() - t0 };
+  return { grid, nodes, edges, connections, paths, negotiations: finalNegotiations, timeMs: performance.now() - t0 };
 }

@@ -5,18 +5,20 @@
  * moves, avoiding full rerouting of all edges on every frame.
  *
  * Strategy:
- * - During drag: grid delta + selective single-pass A* for affected edges
- * - On drop: full negotiated congestion solve for optimal results
- *
- * See OPTIMIZATIONS.md for the rationale behind each optimization.
+ * - Initial load + drop: full negotiated congestion solve (buildScenarioNegotiated)
+ * - During drag: grid delta + selective single-pass A* for affected edges only
  */
 
 import type {
-  Grid2D, NodeDef, EdgeDef, ConnectionPoint, ScenarioResult,
+  Grid2D, NodeDef, EdgeDef, ConnectionPoint, ScenarioResult, EdgePath,
 } from './grid2d.js';
 import {
   createGrid, getCell, setCell, distributeConnections,
 } from './grid2d.js';
+import { buildScenarioNegotiated } from './negotiated.js';
+
+// Re-export EdgePath from grid2d (canonical definition)
+export type { EdgePath } from './grid2d.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -25,12 +27,18 @@ import {
 type Side = 'top' | 'bottom' | 'left' | 'right';
 type MoveDir = 'h' | 'v' | 'd';
 
-/** Cached path for a single edge. */
-export interface EdgePath {
-  edgeId: number;
-  cells: { col: number; row: number }[];
-  /** Set of "col:row" keys for fast intersection testing. */
-  cellSet: Set<string>;
+/**
+ * Tracks which direction edges occupy each cell.
+ * Used to prevent same-direction overlap (two horizontal edges in same cell).
+ */
+interface EdgeDirTracker {
+  h: Set<string>;
+  v: Set<string>;
+  d: Set<string>;
+}
+
+function createDirTracker(): EdgeDirTracker {
+  return { h: new Set(), v: new Set(), d: new Set() };
 }
 
 /** Full routing state — maintained across incremental updates. */
@@ -40,6 +48,8 @@ export interface RoutingState {
   edges: EdgeDef[];
   connections: ConnectionPoint[];
   paths: Map<number, EdgePath>;
+  /** Direction tracker for same-axis overlap prevention. */
+  dirs: EdgeDirTracker;
   /** Grid cell size in pixels (for coordinate conversion). */
   cellSize: number;
 }
@@ -79,7 +89,7 @@ export function pixelNodeToGrid(
 }
 
 // ---------------------------------------------------------------------------
-// Internal helpers (mirrored from negotiated.ts for self-containment)
+// Internal helpers
 // ---------------------------------------------------------------------------
 
 function dirKey(col: number, row: number): string { return `${col}:${row}`; }
@@ -88,17 +98,6 @@ function placeNode(grid: Grid2D, node: NodeDef): void {
   for (let r = node.row; r < node.row + node.h; r++) {
     for (let c = node.col; c < node.col + node.w; c++) {
       setCell(grid, c, r, 'node', node.id);
-    }
-  }
-}
-
-function clearNode(grid: Grid2D, node: NodeDef): void {
-  for (let r = node.row; r < node.row + node.h; r++) {
-    for (let c = node.col; c < node.col + node.w; c++) {
-      const cell = getCell(grid, c, r);
-      if (cell && cell.type === 'node' && cell.id === node.id) {
-        setCell(grid, c, r, 'empty', 0);
-      }
     }
   }
 }
@@ -202,7 +201,7 @@ function blockConnectionCorridors(grid: Grid2D, connections: ConnectionPoint[]):
 }
 
 // ---------------------------------------------------------------------------
-// Single-pass A* (fast, no negotiation — used during drag)
+// Direction-aware A* (fast single-pass — used during drag)
 // ---------------------------------------------------------------------------
 
 const DIRS = [
@@ -217,6 +216,7 @@ const BACKTRACK_PENALTY = 50;
 const TURN_BASE_PENALTY = 4;
 const TURN_IMBALANCE_FACTOR = 0.5;
 const JUMP_PENALTY = 6;
+const SAME_DIR_PENALTY = 100;
 const DIAGONAL_EXTRA_COST = 1.4;
 const DIAGONAL_ZIGZAG_PENALTY = 8;
 
@@ -281,10 +281,14 @@ class MinHeap {
   }
 }
 
+/**
+ * Direction-aware A* — blocks same-direction overlap, allows perpendicular crossings.
+ */
 function fastAstar(
   grid: Grid2D,
   sc: number, sr: number, sourceSide: Side,
   tc: number, tr: number, targetSide: Side,
+  dirs: EdgeDirTracker,
 ): { col: number; row: number }[] | null {
   const stateKey = (c: number, r: number, d: MoveDir | null) => {
     const di = d === null ? 0 : d === 'h' ? 1 : d === 'v' ? 2 : 3;
@@ -374,9 +378,22 @@ function fastAstar(
         stepCost += TURN_BASE_PENALTY + Math.floor(imbalance * TURN_IMBALANCE_FACTOR);
       }
 
-      // Crossing existing edge — treat as jump
+      // Direction-aware edge crossing: block same-direction overlap, penalize perpendicular
       if (cell.type === 'edge' || cell.type === 'jump') {
-        stepCost += JUMP_PENALTY;
+        const k = dirKey(nc, nr);
+        const sameDir = (axis === 'h' && dirs.h.has(k)) ||
+                        (axis === 'v' && dirs.v.has(k)) ||
+                        (axis === 'd' && dirs.d.has(k));
+        if (sameDir) {
+          // Same direction = parallel overlap — very expensive, essentially blocked
+          stepCost += SAME_DIR_PENALTY;
+        } else if (dirs.h.has(k) || dirs.v.has(k) || dirs.d.has(k)) {
+          // Different direction = perpendicular crossing (jump)
+          stepCost += JUMP_PENALTY;
+        } else {
+          // Edge on grid but no direction recorded — treat as occupied
+          stepCost += SAME_DIR_PENALTY;
+        }
       }
 
       const ng = current.g + stepCost;
@@ -401,36 +418,46 @@ function fastAstar(
 }
 
 // ---------------------------------------------------------------------------
-// Path placement / clearing
+// Path placement / clearing — with direction tracking
 // ---------------------------------------------------------------------------
 
 function placeEdgePath(
   grid: Grid2D,
   edgeId: number,
   path: { col: number; row: number }[],
+  dirs: EdgeDirTracker,
 ): void {
-  for (const p of path) {
+  for (let i = 0; i < path.length; i++) {
+    const p = path[i]!;
+
+    // Determine segment direction from neighbors in the path
+    let dir: MoveDir | null = null;
+    if (i > 0) {
+      const prev = path[i - 1]!;
+      const dcol = prev.col !== p.col;
+      const drow = prev.row !== p.row;
+      dir = (dcol && drow) ? 'd' : dcol ? 'h' : 'v';
+    } else if (i < path.length - 1) {
+      const next = path[i + 1]!;
+      const dcol = next.col !== p.col;
+      const drow = next.row !== p.row;
+      dir = (dcol && drow) ? 'd' : dcol ? 'h' : 'v';
+    }
+
+    // Record direction
+    if (dir) {
+      (dir === 'h' ? dirs.h : dir === 'v' ? dirs.v : dirs.d).add(dirKey(p.col, p.row));
+    }
+
     const cell = getCell(grid, p.col, p.row);
     if (!cell) continue;
+
     if (cell.type === 'edge' || cell.type === 'jump') {
       setCell(grid, p.col, p.row, 'jump', edgeId);
     } else if (cell.type === 'connection') {
       // Keep as connection
     } else if (cell.type === 'empty') {
       setCell(grid, p.col, p.row, 'edge', edgeId);
-    }
-  }
-}
-
-function clearEdgePath(grid: Grid2D, path: EdgePath): void {
-  for (const p of path.cells) {
-    const cell = getCell(grid, p.col, p.row);
-    if (!cell) continue;
-    if (cell.type === 'edge' && cell.id === path.edgeId) {
-      setCell(grid, p.col, p.row, 'empty', 0);
-    } else if (cell.type === 'jump') {
-      // Downgrade jump back to edge (another edge still uses this cell)
-      setCell(grid, p.col, p.row, 'edge', 0);
     }
   }
 }
@@ -489,7 +516,7 @@ function buildConnLookup(edges: EdgeDef[], connections: ConnectionPoint[]): Map<
 
 /**
  * Create initial routing state with full negotiated congestion solve.
- * Call this once when the canvas first loads or edges change.
+ * Uses buildScenarioNegotiated for optimal, overlap-free routing.
  */
 export function createRoutingState(
   nodes: NodeDef[],
@@ -497,42 +524,38 @@ export function createRoutingState(
   cellSize: number,
   padding: number = 2,
 ): RoutingState {
-  // We need the negotiated solver for the initial full solve.
-  // Import dynamically to avoid circular deps — but since this is all sync,
-  // we replicate the core logic inline for the initial build.
-  const grid = buildGrid(nodes, padding);
-  const connections = computeConnections(nodes, edges);
-  placeConnectionsOnGrid(grid, connections);
-  blockConnectionCorridors(grid, connections);
+  const result = buildScenarioNegotiated(nodes, edges, padding);
 
-  const connByEdge = buildConnLookup(edges, connections);
-  const paths = new Map<number, EdgePath>();
+  // Build direction tracker from the paths
+  const dirs = createDirTracker();
+  const paths = result.paths ?? new Map<number, EdgePath>();
 
-  // Single-pass route all edges for initial state
-  for (const e of edges) {
-    const ep = connByEdge.get(e.id);
-    if (!ep?.src || !ep?.tgt) continue;
-
-    const path = fastAstar(
-      grid,
-      ep.src.col, ep.src.row, ep.src.side,
-      ep.tgt.col, ep.tgt.row, ep.tgt.side,
-    );
-
-    if (path) {
-      placeEdgePath(grid, e.id, path);
-      paths.set(e.id, { edgeId: e.id, cells: path, cellSet: pathToCellSet(path) });
+  for (const [, edgePath] of paths) {
+    for (let i = 1; i < edgePath.cells.length; i++) {
+      const prev = edgePath.cells[i - 1]!;
+      const cur = edgePath.cells[i]!;
+      const dcol = prev.col !== cur.col;
+      const drow = prev.row !== cur.row;
+      const dir: MoveDir = (dcol && drow) ? 'd' : dcol ? 'h' : 'v';
+      (dir === 'h' ? dirs.h : dir === 'v' ? dirs.v : dirs.d).add(dirKey(cur.col, cur.row));
     }
   }
 
-  return { grid, nodes: [...nodes], edges: [...edges], connections, paths, cellSize };
+  return {
+    grid: result.grid,
+    nodes: [...nodes],
+    edges: [...edges],
+    connections: result.connections,
+    paths,
+    dirs,
+    cellSize,
+  };
 }
 
 /**
  * Incremental update: move a single node to a new position.
  * Returns a new RoutingState with only affected edges rerouted (fast single-pass A*).
- *
- * Use during drag for interactive performance.
+ * Uses direction tracking to prevent same-axis overlap.
  */
 export function moveNode(
   state: RoutingState,
@@ -547,7 +570,6 @@ export function moveNode(
   const oldNode = state.nodes[oldNodeIdx]!;
   const newNode: NodeDef = { ...oldNode, col: newCol, row: newRow };
 
-  // Updated nodes array
   const newNodes = [...state.nodes];
   newNodes[oldNodeIdx] = newNode;
 
@@ -559,9 +581,7 @@ export function moveNode(
     }
   }
 
-  // Find affected edges:
-  // 1. Edges connected to the moved node
-  // 2. Edges whose cached path intersects the new node footprint
+  // Find affected edges
   const connectedEdgeIds = new Set<number>();
   for (const e of state.edges) {
     if (e.source === nodeId || e.target === nodeId) {
@@ -572,7 +592,6 @@ export function moveNode(
   const collidingEdgeIds = new Set<number>();
   for (const [edgeId, edgePath] of state.paths) {
     if (connectedEdgeIds.has(edgeId)) continue;
-    // Check if any cell in this path intersects the new node footprint
     for (const key of edgePath.cellSet) {
       if (newFootprint.has(key)) {
         collidingEdgeIds.add(edgeId);
@@ -583,7 +602,7 @@ export function moveNode(
 
   const affectedEdgeIds = new Set([...connectedEdgeIds, ...collidingEdgeIds]);
 
-  // Rebuild grid from scratch (grid delta is complex with corridor changes)
+  // Rebuild grid
   const grid = buildGrid(newNodes, padding);
   const connections = computeConnections(newNodes, state.edges);
   placeConnectionsOnGrid(grid, connections);
@@ -591,11 +610,11 @@ export function moveNode(
 
   const connByEdge = buildConnLookup(state.edges, connections);
   const newPaths = new Map<number, EdgePath>();
+  const dirs = createDirTracker();
 
-  // Place unaffected edge paths back onto grid
+  // Place unaffected edge paths back onto grid with direction tracking
   for (const [edgeId, edgePath] of state.paths) {
     if (affectedEdgeIds.has(edgeId)) continue;
-    // Re-validate: make sure path cells don't collide with new grid state
     let valid = true;
     for (const p of edgePath.cells) {
       const cell = getCell(grid, p.col, p.row);
@@ -605,15 +624,14 @@ export function moveNode(
       }
     }
     if (valid) {
-      placeEdgePath(grid, edgeId, edgePath.cells);
+      placeEdgePath(grid, edgeId, edgePath.cells, dirs);
       newPaths.set(edgeId, edgePath);
     } else {
-      // Path now collides — add to affected set
       affectedEdgeIds.add(edgeId);
     }
   }
 
-  // Route affected edges with fast single-pass A*
+  // Route affected edges with direction-aware fast A*
   for (const edgeId of affectedEdgeIds) {
     const ep = connByEdge.get(edgeId);
     if (!ep?.src || !ep?.tgt) continue;
@@ -622,22 +640,22 @@ export function moveNode(
       grid,
       ep.src.col, ep.src.row, ep.src.side,
       ep.tgt.col, ep.tgt.row, ep.tgt.side,
+      dirs,
     );
 
     if (path) {
-      placeEdgePath(grid, edgeId, path);
+      placeEdgePath(grid, edgeId, path, dirs);
       newPaths.set(edgeId, { edgeId, cells: path, cellSet: pathToCellSet(path) });
     }
   }
 
-  return { grid, nodes: newNodes, edges: state.edges, connections, paths: newPaths, cellSize: state.cellSize };
+  return { grid, nodes: newNodes, edges: state.edges, connections, paths: newPaths, dirs, cellSize: state.cellSize };
 }
 
 /**
  * Full reroute using negotiated congestion solver.
  * Call on mouse-up / drag-stop for optimal results.
- *
- * Delegates to buildScenarioNegotiated and wraps result as RoutingState.
+ * Delegates to buildScenarioNegotiated for proper direction tracking + congestion resolution.
  */
 export { buildScenarioNegotiated } from './negotiated.js';
 
@@ -645,91 +663,32 @@ export function fullReroute(
   state: RoutingState,
   padding: number = 2,
 ): RoutingState {
-  // Rebuild from scratch with full negotiated solver
-  // Import inline to keep this module self-contained
-  const grid = buildGrid(state.nodes, padding);
-  const connections = computeConnections(state.nodes, state.edges);
-  placeConnectionsOnGrid(grid, connections);
-  blockConnectionCorridors(grid, connections);
+  const result = buildScenarioNegotiated(state.nodes, state.edges, padding);
 
-  const connByEdge = buildConnLookup(state.edges, connections);
-  const paths = new Map<number, EdgePath>();
+  // Build direction tracker from the paths
+  const dirs = createDirTracker();
+  const paths = result.paths ?? new Map<number, EdgePath>();
 
-  // Use the full negotiated approach (rip-up and reroute with escalating costs)
-  // For simplicity, we run the single-pass approach here too but with multiple
-  // iterations to resolve conflicts.
-  const MAX_ITERATIONS = 20;
-  const HISTORY_INCREMENT = 4;
-
-  interface CongestionMap {
-    history: Map<string, number>;
-    present: Map<string, Set<number>>;
-  }
-
-  const cong: CongestionMap = { history: new Map(), present: new Map() };
-
-  function congKey(col: number, row: number, axis: MoveDir): string {
-    return `${col}:${row}:${axis}`;
-  }
-
-  for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
-    // Clear previous edge cells
-    for (let r = 0; r < grid.rows; r++) {
-      for (let c = 0; c < grid.cols; c++) {
-        const cell = grid.cells[r]![c]!;
-        if (cell.type === 'edge' || cell.type === 'jump') {
-          grid.cells[r]![c] = { type: 'empty', id: 0 };
-        }
-      }
-    }
-    cong.present.clear();
-    paths.clear();
-
-    // Route all edges
-    for (const e of state.edges) {
-      const ep = connByEdge.get(e.id);
-      if (!ep?.src || !ep?.tgt) continue;
-
-      const path = fastAstar(
-        grid,
-        ep.src.col, ep.src.row, ep.src.side,
-        ep.tgt.col, ep.tgt.row, ep.tgt.side,
-      );
-
-      if (path) {
-        placeEdgePath(grid, e.id, path);
-        paths.set(e.id, { edgeId: e.id, cells: path, cellSet: pathToCellSet(path) });
-
-        // Record congestion
-        for (let i = 1; i < path.length; i++) {
-          const prev = path[i - 1]!;
-          const cur = path[i]!;
-          const dcol = prev.col !== cur.col;
-          const drow = prev.row !== cur.row;
-          const axis: MoveDir = (dcol && drow) ? 'd' : dcol ? 'h' : 'v';
-          const k = congKey(cur.col, cur.row, axis);
-          if (!cong.present.has(k)) cong.present.set(k, new Set());
-          cong.present.get(k)!.add(e.id);
-        }
-      }
-    }
-
-    // Check convergence
-    let overused = 0;
-    for (const users of cong.present.values()) {
-      if (users.size > 1) overused++;
-    }
-    if (overused === 0) break;
-
-    // Update history
-    for (const [k, users] of cong.present) {
-      if (users.size > 1) {
-        cong.history.set(k, (cong.history.get(k) ?? 0) + HISTORY_INCREMENT);
-      }
+  for (const [, edgePath] of paths) {
+    for (let i = 1; i < edgePath.cells.length; i++) {
+      const prev = edgePath.cells[i - 1]!;
+      const cur = edgePath.cells[i]!;
+      const dcol = prev.col !== cur.col;
+      const drow = prev.row !== cur.row;
+      const dir: MoveDir = (dcol && drow) ? 'd' : dcol ? 'h' : 'v';
+      (dir === 'h' ? dirs.h : dir === 'v' ? dirs.v : dirs.d).add(dirKey(cur.col, cur.row));
     }
   }
 
-  return { grid, nodes: state.nodes, edges: state.edges, connections, paths, cellSize: state.cellSize };
+  return {
+    grid: result.grid,
+    nodes: state.nodes,
+    edges: state.edges,
+    connections: result.connections,
+    paths,
+    dirs,
+    cellSize: state.cellSize,
+  };
 }
 
 /**
@@ -783,7 +742,6 @@ export function findJumps(
     for (let c = 0; c < state.grid.cols; c++) {
       const cell = state.grid.cells[r]![c]!;
       if (cell.type === 'jump') {
-        // Determine axis by looking at surrounding cells
         const left = getCell(state.grid, c - 1, r);
         const right = getCell(state.grid, c + 1, r);
         const hasH = (left && (left.type === 'edge' || left.type === 'jump' || left.type === 'connection')) ||

@@ -56,11 +56,23 @@ export interface ConnectionPoint {
     /** The label of the OTHER node this connection links to. */
     otherNodeLabel: string;
 }
+/** Cached path for a single edge (used by incremental routing). */
+export interface EdgePath {
+    edgeId: number;
+    cells: {
+        col: number;
+        row: number;
+    }[];
+    /** Set of "col:row" keys for fast intersection testing. */
+    cellSet: Set<string>;
+}
 export interface ScenarioResult {
     grid: Grid2D;
     nodes: NodeDef[];
     edges: EdgeDef[];
     connections: ConnectionPoint[];
+    /** Routed paths per edge (edgeId → path). Present when routing was performed. */
+    paths?: Map<number, EdgePath>;
     /** Number of negotiation rounds (rip-up and reroute cycles). */
     negotiations?: number;
     /** Time in milliseconds to generate the routing. */

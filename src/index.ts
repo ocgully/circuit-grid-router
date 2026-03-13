@@ -74,6 +74,7 @@ export type {
   Grid2D,
   NodeDef,
   EdgeDef,
+  EdgePath,
   ConnectionPoint,
   ScenarioResult,
 } from './grid2d.js';
@@ -94,7 +95,7 @@ export {
   gridToPixel,
   pixelNodeToGrid,
 } from './incremental.js';
-export type { RoutingState, EdgePath } from './incremental.js';
+export type { RoutingState } from './incremental.js';
 
 // WFC approaches
 export { buildScenarioWfcPath } from './wfc-path.js';

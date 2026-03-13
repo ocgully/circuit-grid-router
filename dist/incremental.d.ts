@@ -5,21 +5,19 @@
  * moves, avoiding full rerouting of all edges on every frame.
  *
  * Strategy:
- * - During drag: grid delta + selective single-pass A* for affected edges
- * - On drop: full negotiated congestion solve for optimal results
- *
- * See OPTIMIZATIONS.md for the rationale behind each optimization.
+ * - Initial load + drop: full negotiated congestion solve (buildScenarioNegotiated)
+ * - During drag: grid delta + selective single-pass A* for affected edges only
  */
-import type { Grid2D, NodeDef, EdgeDef, ConnectionPoint, ScenarioResult } from './grid2d.js';
-/** Cached path for a single edge. */
-export interface EdgePath {
-    edgeId: number;
-    cells: {
-        col: number;
-        row: number;
-    }[];
-    /** Set of "col:row" keys for fast intersection testing. */
-    cellSet: Set<string>;
+import type { Grid2D, NodeDef, EdgeDef, ConnectionPoint, ScenarioResult, EdgePath } from './grid2d.js';
+export type { EdgePath } from './grid2d.js';
+/**
+ * Tracks which direction edges occupy each cell.
+ * Used to prevent same-direction overlap (two horizontal edges in same cell).
+ */
+interface EdgeDirTracker {
+    h: Set<string>;
+    v: Set<string>;
+    d: Set<string>;
 }
 /** Full routing state — maintained across incremental updates. */
 export interface RoutingState {
@@ -28,6 +26,8 @@ export interface RoutingState {
     edges: EdgeDef[];
     connections: ConnectionPoint[];
     paths: Map<number, EdgePath>;
+    /** Direction tracker for same-axis overlap prevention. */
+    dirs: EdgeDirTracker;
     /** Grid cell size in pixels (for coordinate conversion). */
     cellSize: number;
 }
@@ -39,21 +39,19 @@ export declare function gridToPixel(cell: number, cellSize: number): number;
 export declare function pixelNodeToGrid(id: number, label: string, x: number, y: number, width: number, height: number, cellSize: number): NodeDef;
 /**
  * Create initial routing state with full negotiated congestion solve.
- * Call this once when the canvas first loads or edges change.
+ * Uses buildScenarioNegotiated for optimal, overlap-free routing.
  */
 export declare function createRoutingState(nodes: NodeDef[], edges: EdgeDef[], cellSize: number, padding?: number): RoutingState;
 /**
  * Incremental update: move a single node to a new position.
  * Returns a new RoutingState with only affected edges rerouted (fast single-pass A*).
- *
- * Use during drag for interactive performance.
+ * Uses direction tracking to prevent same-axis overlap.
  */
 export declare function moveNode(state: RoutingState, nodeId: number, newCol: number, newRow: number, padding?: number): RoutingState;
 /**
  * Full reroute using negotiated congestion solver.
  * Call on mouse-up / drag-stop for optimal results.
- *
- * Delegates to buildScenarioNegotiated and wraps result as RoutingState.
+ * Delegates to buildScenarioNegotiated for proper direction tracking + congestion resolution.
  */
 export { buildScenarioNegotiated } from './negotiated.js';
 export declare function fullReroute(state: RoutingState, padding?: number): RoutingState;
