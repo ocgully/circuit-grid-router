@@ -467,6 +467,243 @@ function clearEdgeCells(grid: Grid2D, dirs: EdgeDirTracker): void {
 }
 
 // ---------------------------------------------------------------------------
+// Connection side negotiation — reassign sides when paths are poor
+// ---------------------------------------------------------------------------
+
+interface SideAssignment {
+  srcSide: Side;
+  tgtSide: Side;
+}
+
+/** Get the perpendicular alternative sides for a given side. */
+function alternativeSides(current: Side): Side[] {
+  if (current === 'left' || current === 'right') return ['top', 'bottom'];
+  return ['left', 'right'];
+}
+
+/** Get the center connection position for a node on a given side. */
+function sideCenterPosition(node: NodeDef, side: Side): { col: number; row: number } {
+  switch (side) {
+    case 'right':  return { col: node.col + node.w,                        row: node.row + Math.floor((node.h - 1) / 2) };
+    case 'left':   return { col: node.col - 1,                             row: node.row + Math.floor((node.h - 1) / 2) };
+    case 'bottom': return { col: node.col + Math.floor((node.w - 1) / 2),  row: node.row + node.h };
+    case 'top':    return { col: node.col + Math.floor((node.w - 1) / 2),  row: node.row - 1 };
+  }
+}
+
+/** Manhattan distance between two grid points. */
+function manhattan(c1: number, r1: number, c2: number, r2: number): number {
+  return Math.abs(c2 - c1) + Math.abs(r2 - r1);
+}
+
+/**
+ * Compute connections using explicit side assignments (instead of facingSide).
+ * Falls back to facingSide for edges without overrides.
+ */
+function computeConnectionsWithSides(
+  nodes: NodeDef[],
+  edges: EdgeDef[],
+  sideAssignments: Map<number, SideAssignment>,
+): ConnectionPoint[] {
+  const nodeMap = new Map<number, NodeDef>();
+  for (const n of nodes) nodeMap.set(n.id, n);
+
+  interface SideEntry { edgeId: number; otherNode: NodeDef; otherNodeId: number }
+  const sideGroups = new Map<string, SideEntry[]>();
+
+  for (const e of edges) {
+    const src = nodeMap.get(e.source);
+    const tgt = nodeMap.get(e.target);
+    if (!src || !tgt) continue;
+
+    const assignment = sideAssignments.get(e.id);
+    const srcSide = assignment?.srcSide ?? facingSide(src, tgt);
+    const tgtSide = assignment?.tgtSide ?? facingSide(tgt, src);
+
+    const srcKey = `${e.source}:${srcSide}`;
+    if (!sideGroups.has(srcKey)) sideGroups.set(srcKey, []);
+    sideGroups.get(srcKey)!.push({ edgeId: e.id, otherNode: tgt, otherNodeId: e.target });
+
+    const tgtKey = `${e.target}:${tgtSide}`;
+    if (!sideGroups.has(tgtKey)) sideGroups.set(tgtKey, []);
+    sideGroups.get(tgtKey)!.push({ edgeId: e.id, otherNode: src, otherNodeId: e.source });
+  }
+
+  const connections: ConnectionPoint[] = [];
+  for (const [key, entries] of sideGroups) {
+    const colonIdx = key.lastIndexOf(':');
+    const nodeId = parseInt(key.slice(0, colonIdx));
+    const side = key.slice(colonIdx + 1) as Side;
+    const node = nodeMap.get(nodeId)!;
+
+    if (side === 'left' || side === 'right') {
+      entries.sort((a, b) => (a.otherNode.row + a.otherNode.h / 2) - (b.otherNode.row + b.otherNode.h / 2));
+    } else {
+      entries.sort((a, b) => (a.otherNode.col + a.otherNode.w / 2) - (b.otherNode.col + b.otherNode.w / 2));
+    }
+
+    let fixedCoord: number, perpStart: number, perpLen: number;
+    switch (side) {
+      case 'right':  fixedCoord = node.col + node.w; perpStart = node.row; perpLen = node.h; break;
+      case 'left':   fixedCoord = node.col - 1;      perpStart = node.row; perpLen = node.h; break;
+      case 'bottom': fixedCoord = node.row + node.h;  perpStart = node.col; perpLen = node.w; break;
+      case 'top':    fixedCoord = node.row - 1;       perpStart = node.col; perpLen = node.w; break;
+    }
+
+    const positions = distributeConnections(perpStart, perpLen, entries.length);
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i]!;
+      const pos = positions[i]!;
+      const otherLabel = nodeMap.get(entry.otherNodeId)?.label ?? '';
+      if (side === 'left' || side === 'right') {
+        connections.push({ nodeId, edgeId: entry.edgeId, col: fixedCoord, row: pos, side, otherNodeId: entry.otherNodeId, otherNodeLabel: otherLabel });
+      } else {
+        connections.push({ nodeId, edgeId: entry.edgeId, col: pos, row: fixedCoord, side, otherNodeId: entry.otherNodeId, otherNodeLabel: otherLabel });
+      }
+    }
+  }
+  return connections;
+}
+
+/** Clear connection and corridor-blocked cells from the grid (preserving nodes). */
+function clearConnectionState(grid: Grid2D): void {
+  for (let r = 0; r < grid.rows; r++) {
+    for (let c = 0; c < grid.cols; c++) {
+      const cell = grid.cells[r]![c]!;
+      if (cell.type === 'connection' || cell.type === 'blocked') {
+        grid.cells[r]![c] = { type: 'empty', id: 0 };
+      }
+    }
+  }
+}
+
+/** Place connections on the grid and block corridors. Returns edge→endpoint lookup. */
+function placeConnectionState(
+  grid: Grid2D,
+  connections: ConnectionPoint[],
+  edges: EdgeDef[],
+): Map<number, { src: ConnectionPoint | null; tgt: ConnectionPoint | null }> {
+  for (const cp of connections) {
+    const cell = getCell(grid, cp.col, cp.row);
+    if (cell && cell.type === 'empty') {
+      setCell(grid, cp.col, cp.row, 'connection', cp.nodeId);
+    }
+  }
+  blockConnectionCorridors(grid, connections);
+
+  const connByEdge = new Map<number, { src: ConnectionPoint | null; tgt: ConnectionPoint | null }>();
+  for (const e of edges) connByEdge.set(e.id, { src: null, tgt: null });
+  for (const cp of connections) {
+    const entry = connByEdge.get(cp.edgeId);
+    if (!entry) continue;
+    const edge = edges.find(ed => ed.id === cp.edgeId);
+    if (!edge) continue;
+    if (cp.nodeId === edge.source) entry.src = cp;
+    else if (cp.nodeId === edge.target) entry.tgt = cp;
+  }
+  return connByEdge;
+}
+
+/** Path quality threshold: paths longer than this ratio vs Manhattan are candidates for side reassignment. */
+const PATH_QUALITY_THRESHOLD = 2.0;
+
+/** Iterations after which to attempt side reassignment. */
+const REASSIGN_AFTER_ITERATIONS = [0, 3];
+
+/**
+ * Evaluate routed paths and try alternative side assignments for poor ones.
+ * Returns true if any assignment changed.
+ */
+function negotiateSides(
+  nodes: NodeDef[],
+  edges: EdgeDef[],
+  paths: Map<number, EdgePath>,
+  sideAssignments: Map<number, SideAssignment>,
+  grid: Grid2D,
+  dirs: EdgeDirTracker,
+  cong: CongestionMap,
+  iteration: number,
+): boolean {
+  const nodeMap = new Map<number, NodeDef>();
+  for (const n of nodes) nodeMap.set(n.id, n);
+
+  let changed = false;
+
+  for (const e of edges) {
+    const path = paths.get(e.id);
+    if (!path) continue;
+
+    const assignment = sideAssignments.get(e.id);
+    if (!assignment) continue;
+
+    const src = nodeMap.get(e.source);
+    const tgt = nodeMap.get(e.target);
+    if (!src || !tgt) continue;
+
+    // Current endpoint positions (center of assigned side)
+    const srcPos = sideCenterPosition(src, assignment.srcSide);
+    const tgtPos = sideCenterPosition(tgt, assignment.tgtSide);
+    const ideal = manhattan(srcPos.col, srcPos.row, tgtPos.col, tgtPos.row);
+    const actual = path.cells.length;
+
+    if (ideal < 2 || actual <= ideal * PATH_QUALITY_THRESHOLD) continue;
+
+    // Generate candidate side pairs: current + perpendicular alternatives
+    const srcCandidates = [assignment.srcSide, ...alternativeSides(assignment.srcSide)];
+    const tgtCandidates = [assignment.tgtSide, ...alternativeSides(assignment.tgtSide)];
+
+    let bestLen = actual;
+    let bestSrcSide = assignment.srcSide;
+    let bestTgtSide = assignment.tgtSide;
+
+    for (const ss of srcCandidates) {
+      for (const ts of tgtCandidates) {
+        if (ss === assignment.srcSide && ts === assignment.tgtSide) continue;
+
+        const sPos = sideCenterPosition(src, ss);
+        const tPos = sideCenterPosition(tgt, ts);
+
+        // Bounds check
+        if (sPos.col < 0 || sPos.col >= grid.cols || sPos.row < 0 || sPos.row >= grid.rows) continue;
+        if (tPos.col < 0 || tPos.col >= grid.cols || tPos.row < 0 || tPos.row >= grid.rows) continue;
+
+        // Temporarily ensure candidate cells are accessible
+        const sCellOrig = getCell(grid, sPos.col, sPos.row);
+        const tCellOrig = getCell(grid, tPos.col, tPos.row);
+        if (sCellOrig?.type === 'node' || tCellOrig?.type === 'node') continue;
+
+        const sWasBlocked = sCellOrig?.type === 'blocked';
+        const tWasBlocked = tCellOrig?.type === 'blocked';
+        if (sWasBlocked) setCell(grid, sPos.col, sPos.row, 'empty', 0);
+        if (tWasBlocked) setCell(grid, tPos.col, tPos.row, 'empty', 0);
+
+        const trial = negotiatedAstar(
+          grid, sPos.col, sPos.row, ss, tPos.col, tPos.row, ts,
+          dirs, cong, iteration, e.id,
+        );
+
+        // Restore
+        if (sWasBlocked) setCell(grid, sPos.col, sPos.row, 'blocked', 0);
+        if (tWasBlocked) setCell(grid, tPos.col, tPos.row, 'blocked', 0);
+
+        if (trial && trial.length < bestLen) {
+          bestLen = trial.length;
+          bestSrcSide = ss;
+          bestTgtSide = ts;
+        }
+      }
+    }
+
+    if (bestSrcSide !== assignment.srcSide || bestTgtSide !== assignment.tgtSide) {
+      sideAssignments.set(e.id, { srcSide: bestSrcSide, tgtSide: bestTgtSide });
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+// ---------------------------------------------------------------------------
 // Public API — Negotiated Congestion Router
 // ---------------------------------------------------------------------------
 
@@ -492,31 +729,22 @@ export function buildScenarioNegotiated(
   // 2. Place nodes
   for (const n of nodes) placeNode(grid, n);
 
-  // 3. Connections
-  const connections = computeConnections(nodes, edges);
-  for (const cp of connections) {
-    const cell = getCell(grid, cp.col, cp.row);
-    if (cell && cell.type === 'empty') {
-      setCell(grid, cp.col, cp.row, 'connection', cp.nodeId);
-    }
+  // 3. Initial side assignments from facingSide
+  const nodeMap = new Map<number, NodeDef>();
+  for (const n of nodes) nodeMap.set(n.id, n);
+  const sideAssignments = new Map<number, SideAssignment>();
+  for (const e of edges) {
+    const src = nodeMap.get(e.source);
+    const tgt = nodeMap.get(e.target);
+    if (!src || !tgt) continue;
+    sideAssignments.set(e.id, { srcSide: facingSide(src, tgt), tgtSide: facingSide(tgt, src) });
   }
 
-  // 4. Corridor blocking
-  blockConnectionCorridors(grid, connections);
+  // 4. Compute and place connections
+  let connections = computeConnectionsWithSides(nodes, edges, sideAssignments);
+  let connByEdge = placeConnectionState(grid, connections, edges);
 
-  // 5. Connection lookup
-  const connByEdge = new Map<number, { src: ConnectionPoint | null; tgt: ConnectionPoint | null }>();
-  for (const e of edges) connByEdge.set(e.id, { src: null, tgt: null });
-  for (const cp of connections) {
-    const entry = connByEdge.get(cp.edgeId);
-    if (!entry) continue;
-    const edge = edges.find(ed => ed.id === cp.edgeId);
-    if (!edge) continue;
-    if (cp.nodeId === edge.source) entry.src = cp;
-    else if (cp.nodeId === edge.target) entry.tgt = cp;
-  }
-
-  // 6. Negotiated routing loop
+  // 5. Negotiated routing loop with connection negotiation
   const t0 = performance.now();
   const dirs = createDirTracker();
   const cong = createCongestion();
@@ -546,6 +774,25 @@ export function buildScenarioNegotiated(
       if (path) {
         placeEdgePath(grid, e.id, path, dirs, cong);
         paths.set(e.id, { edgeId: e.id, cells: path, cellSet: pathToCellSet(path) });
+      }
+    }
+
+    // Connection negotiation: try alternative sides for poor paths
+    if (REASSIGN_AFTER_ITERATIONS.includes(iteration)) {
+      const sidesChanged = negotiateSides(
+        nodes, edges, paths, sideAssignments,
+        grid, dirs, cong, iteration,
+      );
+      if (sidesChanged) {
+        // Rebuild connections with new side assignments
+        clearEdgeCells(grid, dirs);
+        clearConnectionState(grid);
+        connections = computeConnectionsWithSides(nodes, edges, sideAssignments);
+        connByEdge = placeConnectionState(grid, connections, edges);
+        resetPresent(cong);
+        paths.clear();
+        // Don't break — re-route with updated connections in next iteration
+        continue;
       }
     }
 
