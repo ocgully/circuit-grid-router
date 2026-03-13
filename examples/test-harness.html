@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Circuit Grid Router — Visual Test Harness</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: #0a0a0a; color: #e0e0e0; padding: 24px; }
+  h1 { font-size: 20px; margin-bottom: 4px; color: #fff; }
+  .subtitle { font-size: 13px; color: #888; margin-bottom: 24px; }
+  .tier { margin-bottom: 32px; }
+  .tier h2 { font-size: 15px; color: #3b82f6; margin-bottom: 12px; border-bottom: 1px solid #222; padding-bottom: 4px; }
+  .grid-wrap { display: flex; flex-wrap: wrap; gap: 16px; }
+  .scenario { background: #141414; border: 1px solid #222; border-radius: 8px; padding: 12px; }
+  .scenario h3 { font-size: 13px; margin-bottom: 2px; }
+  .scenario .desc { font-size: 11px; color: #888; margin-bottom: 8px; }
+  .scenario .stats { font-size: 10px; color: #666; margin-top: 4px; }
+  canvas { display: block; border: 1px solid #333; border-radius: 4px; }
+  .tooltip { position: fixed; background: #1a1a1a; color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-family: monospace; pointer-events: none; display: none; z-index: 100; border: 1px solid #333; }
+</style>
+</head>
+<body>
+<h1>Circuit Grid Router — Visual Test Harness</h1>
+<p class="subtitle">Hover cells for details. Each scenario runs the negotiated congestion router.</p>
+<div id="app"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+// This harness uses the built dist — run `npm run build` first, then open this file.
+// For quick testing, serve from repo root: npx serve .
+
+import {
+  buildScenarioNegotiated,
+  getCell,
+} from '../dist/index.js';
+
+// Node/edge builders
+let _nid = 0, _eid = 0;
+function resetIds() { _nid = 0; _eid = 0; }
+function N(label, col, row, w=5, h=5) { return { id: ++_nid, label, col, row, w, h }; }
+function E(src, tgt) { return { id: ++_eid, source: src, target: tgt }; }
+
+// Color palettes
+const NODE_COLORS = ['#3b82f6','#ef4444','#10b981','#f59e0b','#8b5cf6','#ec4899','#06b6d4','#f97316'];
+const EDGE_COLORS = ['#93c5fd','#fca5a5','#6ee7b7','#fcd34d','#c4b5fd','#f9a8d4','#67e8f9','#fdba74'];
+
+function nodeColor(id) { return NODE_COLORS[(id-1) % NODE_COLORS.length]; }
+function edgeColor(id) { return EDGE_COLORS[(id-1) % EDGE_COLORS.length]; }
+
+// Canvas renderer
+function renderGrid(canvas, grid, nodes, connections) {
+  const cellPx = 20;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = grid.cols * cellPx * dpr;
+  canvas.height = grid.rows * cellPx * dpr;
+  canvas.style.width = grid.cols * cellPx + 'px';
+  canvas.style.height = grid.rows * cellPx + 'px';
+
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const nodeLabels = new Map();
+  for (const n of nodes) nodeLabels.set(n.id, n.label);
+
+  const nodeLabelCells = new Map();
+  for (const n of nodes) {
+    const cx = n.col + Math.floor(n.w/2);
+    const cy = n.row + Math.floor(n.h/2);
+    nodeLabelCells.set(`${cx}:${cy}`, n.label);
+  }
+
+  const connMap = new Map();
+  for (const cp of connections) connMap.set(`${cp.col}:${cp.row}`, cp);
+
+  for (let r = 0; r < grid.rows; r++) {
+    for (let c = 0; c < grid.cols; c++) {
+      const cell = grid.cells[r][c];
+      const x = c * cellPx, y = r * cellPx;
+
+      // Fill
+      switch (cell.type) {
+        case 'node': ctx.fillStyle = nodeColor(cell.id); break;
+        case 'connection': ctx.fillStyle = nodeColor(cell.id) + '70'; break;
+        case 'edge': ctx.fillStyle = edgeColor(cell.id); break;
+        case 'jump': ctx.fillStyle = '#fbbf24'; break;
+        case 'blocked': ctx.fillStyle = '#e5e5e5'; break;
+        default: ctx.fillStyle = '#f5f5f5';
+      }
+      ctx.fillRect(x, y, cellPx, cellPx);
+
+      // Border
+      if (cell.type === 'connection') { ctx.strokeStyle = nodeColor(cell.id); ctx.lineWidth = 2; }
+      else if (cell.type === 'jump') { ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 2; }
+      else { ctx.strokeStyle = '#e0e0e0'; ctx.lineWidth = 0.5; }
+      ctx.strokeRect(x, y, cellPx, cellPx);
+
+      // Label
+      const key = `${c}:${r}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      const nodeLabel = nodeLabelCells.get(key);
+      if (nodeLabel) {
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 9px monospace';
+        ctx.fillText(nodeLabel, x + cellPx/2, y + cellPx/2);
+      } else if (cell.type === 'connection') {
+        const cp = connMap.get(key);
+        if (cp?.otherNodeLabel) {
+          ctx.fillStyle = '#333';
+          ctx.font = '7px monospace';
+          ctx.fillText(cp.otherNodeLabel.slice(0,3), x + cellPx/2, y + cellPx/2);
+        }
+      }
+    }
+  }
+
+  // Tooltip on hover
+  canvas.onmousemove = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const col = Math.floor((e.clientX - rect.left) / cellPx);
+    const row = Math.floor((e.clientY - rect.top) / cellPx);
+    const cell = getCell(grid, col, row);
+    const tip = document.getElementById('tooltip');
+    if (cell && (cell.type !== 'empty' || true)) {
+      const cp = connMap.get(`${col}:${row}`);
+      let text = `(${col},${row}) ${cell.type}`;
+      if (cell.id) text += ` #${cell.id}`;
+      if (cp?.otherNodeLabel) text += ` → ${cp.otherNodeLabel}`;
+      tip.textContent = text;
+      tip.style.display = 'block';
+      tip.style.left = (e.clientX + 12) + 'px';
+      tip.style.top = (e.clientY - 8) + 'px';
+    }
+  };
+  canvas.onmouseleave = () => { document.getElementById('tooltip').style.display = 'none'; };
+}
+
+// Build scenarios
+function buildAll() {
+  const tiers = [];
+
+  // Tier 1: Basic
+  resetIds();
+  let a, b, c, d;
+
+  a = N('A',2,3); b = N('B',18,3);
+  const t1 = [
+    { id:'horizontal', title:'Horizontal', desc:'Two nodes side by side', nodes:[a,b], edges:[E(a.id,b.id)] },
+  ];
+  resetIds(); a = N('A',6,1); b = N('B',6,14);
+  t1.push({ id:'vertical', title:'Vertical', desc:'Two nodes stacked', nodes:[a,b], edges:[E(a.id,b.id)] });
+  resetIds(); a = N('A',2,1); b = N('B',18,12);
+  t1.push({ id:'diagonal-se', title:'Diagonal SE', desc:'L-shaped routing with turns', nodes:[a,b], edges:[E(a.id,b.id)] });
+  tiers.push({ name: 'Tier 1: Basic Layouts', scenarios: t1 });
+
+  // Tier 2: Handle positioning
+  resetIds(); a = N('A',2,1); b = N('B',2,10); c = N('C',20,5);
+  const t2 = [{ id:'2-to-1', title:'2 into 1', desc:'Even distribution with gap at center', nodes:[a,b,c], edges:[E(a.id,c.id),E(b.id,c.id)] }];
+  resetIds(); a = N('Src',2,7); b = N('T1',20,1); c = N('T2',20,8); d = N('T3',20,15); const e4 = N('T4',20,22);
+  t2.push({ id:'fan-out', title:'Fan Out (1→4)', desc:'4 edges from one source', nodes:[a,b,c,d,e4], edges:[E(a.id,b.id),E(a.id,c.id),E(a.id,d.id),E(a.id,e4.id)] });
+  tiers.push({ name: 'Tier 2: Handle Positioning', scenarios: t2 });
+
+  // Tier 3: Crossings
+  resetIds(); a = N('A',2,2); b = N('B',20,14); c = N('C',2,14); d = N('D',20,2);
+  const t3 = [{ id:'x-cross', title:'X Crossing', desc:'Two edges must cross — jump expected', nodes:[a,b,c,d], edges:[E(a.id,b.id),E(c.id,d.id)] }];
+  tiers.push({ name: 'Tier 3: Crossings', scenarios: t3 });
+
+  // Tier 4: Patterns
+  resetIds(); a = N('A',1,4); b = N('B',12,4); c = N('C',23,4); d = N('D',34,4);
+  const t4 = [{ id:'chain', title:'Chain A→B→C→D', desc:'Sequential chain', nodes:[a,b,c,d], edges:[E(a.id,b.id),E(b.id,c.id),E(c.id,d.id)] }];
+  resetIds(); a = N('A',12,1); b = N('B',2,10); c = N('C',22,10); d = N('D',12,18);
+  t4.push({ id:'diamond', title:'Diamond', desc:'4 nodes, 4 edges with conflicts', nodes:[a,b,c,d], edges:[E(a.id,b.id),E(a.id,c.id),E(b.id,d.id),E(c.id,d.id)] });
+  tiers.push({ name: 'Tier 4: Multi-Node Patterns', scenarios: t4 });
+
+  // Tier 5: Complex
+  resetIds();
+  const hub = N('Hub',12,10); const sN = N('N',12,1), sNE = N('NE',22,4), sSE = N('SE',22,16), sSW = N('SW',2,16), sNW = N('NW',2,4);
+  const t5 = [{ id:'star', title:'Star (5→Hub)', desc:'Five nodes routing to central hub', nodes:[hub,sN,sNE,sSE,sSW,sNW], edges:[E(sN.id,hub.id),E(sNE.id,hub.id),E(sSE.id,hub.id),E(sSW.id,hub.id),E(sNW.id,hub.id)] }];
+  tiers.push({ name: 'Tier 5: Complex Webs', scenarios: t5 });
+
+  // Tier 6: Distribution
+  resetIds();
+  const dA = N('A',2,4,5,7), dB1 = N('B1',18,1), dB2 = N('B2',18,6), dB3 = N('B3',18,13);
+  const t6 = [{ id:'dist-3', title:'3-Edge Distribution', desc:'Center + pair with gaps', nodes:[dA,dB1,dB2,dB3], edges:[E(dA.id,dB1.id),E(dA.id,dB2.id),E(dA.id,dB3.id)] }];
+  tiers.push({ name: 'Tier 6: Edge Distribution', scenarios: t6 });
+
+  return tiers;
+}
+
+// Render
+const app = document.getElementById('app');
+const tiers = buildAll();
+
+for (const tier of tiers) {
+  const div = document.createElement('div');
+  div.className = 'tier';
+  div.innerHTML = `<h2>${tier.name}</h2><div class="grid-wrap"></div>`;
+  const wrap = div.querySelector('.grid-wrap');
+
+  for (const s of tier.scenarios) {
+    const t0 = performance.now();
+    const result = buildScenarioNegotiated(s.nodes, s.edges, s.padding ?? 2);
+    const ms = (performance.now() - t0).toFixed(1);
+
+    const el = document.createElement('div');
+    el.className = 'scenario';
+    el.innerHTML = `<h3>${s.title}</h3><div class="desc">${s.desc}</div>`;
+    const canvas = document.createElement('canvas');
+    el.appendChild(canvas);
+    el.innerHTML += `<div class="stats">${result.grid.cols}×${result.grid.rows} grid · ${s.nodes.length}N ${s.edges.length}E · ${ms}ms</div>`;
+    wrap.appendChild(el);
+
+    renderGrid(el.querySelector('canvas'), result.grid, s.nodes, result.connections);
+  }
+
+  app.appendChild(div);
+}
+</script>
+</body>
+</html>

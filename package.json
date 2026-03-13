@@ -1,0 +1,45 @@
+{
+  "name": "circuit-grid-router",
+  "version": "0.1.0",
+  "description": "Grid-based orthogonal edge routing library for node-and-edge diagrams. Produces circuit-board-style paths with negotiated congestion, diagonal support, crossing detection, and incremental drag updates.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "grid-router",
+    "edge-routing",
+    "orthogonal-routing",
+    "circuit-board",
+    "pathfinding",
+    "a-star",
+    "negotiated-congestion",
+    "node-graph",
+    "diagram",
+    "reactflow"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ocgully/circuit-grid-router.git"
+  },
+  "license": "MIT",
+  "author": "Christopher Gulliver",
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0",
+    "@types/node": "^22.0.0"
+  }
+}
