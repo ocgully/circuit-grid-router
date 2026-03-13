@@ -6,7 +6,17 @@
 
 Node-and-edge diagram editors (think Figma's connector lines, or circuit schematic tools) need to route edges between nodes without overlapping, crossing through nodes, or creating visual chaos. Most diagram libraries punt on this — they draw straight lines or simple Bezier curves and call it a day.
 
-We needed something better: **circuit-board-style routing** where edges travel on a grid, make clean right-angle turns, avoid each other, and produce crossing "humps" when they must intersect.
+Let's be honest: Bezier curves are faster to compute. A simple cubic spline between two points is nearly free compared to grid-based A* pathfinding. If raw performance is all you care about, stop reading — Beziers win.
+
+But here's the thing: **the cost isn't in the CPU, it's in your head.**
+
+I built this library because I was tired of spending more time *managing my diagrams* than actually thinking about the systems they represent. Every node-and-edge tool I've used has the same problem — you place a few nodes, connect them, and suddenly you're playing a spatial puzzle game trying to reduce edge overlap. You drag Node C to the left because two connections are crossing. That fixes one overlap but creates another. You nudge Node D down. Better, but now you can't tell which edge goes where because three of them are stacked on top of each other, all the same color, all following the same lazy Bezier arc.
+
+If you have any amount of OCD about your diagrams looking *right*, you know the feeling. You're not designing a system anymore — you're arranging furniture. And the tool isn't helping, because it treats edge routing as your problem to solve manually.
+
+Circuit-board routing flips this. Edges route *themselves* around obstacles. They negotiate corridors so they don't overlap. When they must cross, they cross cleanly at marked jump points. Each edge has its own distinct path, and with per-edge coloring, you can trace any connection at a glance. **The diagram stays readable without you having to micromanage it.**
+
+Is it slower than a Bezier? Yes. But good connections that stay out of your way are superior to fast connections that pile on top of each other — because then you don't need to spend your mindshare organizing nodes just to make the diagram legible.
 
 ![Star topology — 5 nodes routing to a central hub](images/star.svg)
 
