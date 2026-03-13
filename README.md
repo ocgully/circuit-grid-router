@@ -191,11 +191,6 @@ One large source node with 5 targets spread vertically to the right. Tests that 
 
 ![Negotiated Congested](docs/images/neg-congested.svg)
 
-### Connection Negotiation: L-Shape
-Two vertically aligned nodes separated by a wide wall. `facingSide` would pick bottom/top, but those paths are blocked. The solver negotiates right-side connections to route an L-shaped path around the obstacle.
-
-![Negotiated L-Shape](docs/images/neg-l-shape.svg)
-
 ### Mind Map (50 Nodes)
 A central hub with 25 direct connections, surrounded by satellite clusters. Demonstrates connection distribution under heavy load and negotiated routing at scale.
 

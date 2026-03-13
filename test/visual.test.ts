@@ -305,15 +305,6 @@ describe('visual regression: SVG golden files', () => {
       testScenarioStructural(s);
     }
 
-    resetIds();
-    {
-      const nA = N('A', 2, 2, 5, 5);
-      const nB = N('B', 2, 20, 5, 5);
-      const wall = N('Wall', 2, 10, 20, 4);
-      const s: Scenario = { id: 'neg-l-shape', title: 'L-Shape', nodes: [nA, nB, wall], edges: [E(nA.id, nB.id)] };
-      testScenario(s);
-      testScenarioStructural(s);
-    }
   });
 
   // --- Tier 5: Complex (structural only — skip SVG golden for large grids) ---

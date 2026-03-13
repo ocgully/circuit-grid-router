@@ -225,12 +225,6 @@ function buildAll() {
     });
   }
 
-  resetIds();
-  {
-    const nA2 = N('A',2,2,5,5), nB2 = N('B',2,20,5,5), wall2 = N('Wall',2,10,20,4);
-    t7.push({ id:'neg-l-shape', title:'L-Shape Obstacle', desc:'Wall between vertical nodes — forces L-shaped path via side negotiation', nodes:[nA2,nB2,wall2], edges:[E(nA2.id,nB2.id)] });
-  }
-
   tiers.push({ name: 'Tier 7: Connection Negotiation', scenarios: t7 });
 
   return tiers;

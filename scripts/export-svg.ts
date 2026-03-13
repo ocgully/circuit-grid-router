@@ -285,21 +285,6 @@ function buildScenarios(): Scenario[] {
     });
   }
 
-  resetIds();
-  {
-    // Two nodes with obstacle forcing L-shaped path — tests that
-    // solver picks the side facing the gap, not the blocked side
-    const nA = N('A', 2, 2, 5, 5);
-    const nB = N('B', 2, 20, 5, 5);
-    const wall = N('Wall', 2, 10, 20, 4);
-    scenarios.push({
-      id: 'neg-l-shape',
-      title: 'Negotiated: L-Shape (obstacle between)',
-      nodes: [nA, nB, wall],
-      edges: [E(nA.id, nB.id)],
-    });
-  }
-
   // Tier 8: 100-node mega-grid (10x10)
   {
     resetIds();
