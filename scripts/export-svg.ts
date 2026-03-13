@@ -209,6 +209,179 @@ function buildScenarios(): Scenario[] {
   const dB1 = N('B1', 18, 1), dB2 = N('B2', 18, 6), dB3 = N('B3', 18, 13);
   scenarios.push({ id: 'dist-3', title: '3-Edge Distribution', nodes: [dA, dB1, dB2, dB3], edges: [E(dA.id, dB1.id), E(dA.id, dB2.id), E(dA.id, dB3.id)] });
 
+  // Tier 7: Connection Negotiation
+  // These scenarios demonstrate side reassignment — the solver picks non-obvious
+  // connection sides when they produce shorter or less congested paths.
+
+  resetIds();
+  {
+    // Obstacle wall blocks direct horizontal path → solver should route around
+    // and potentially reassign connection sides to top/bottom
+    const nA = N('A', 2, 8, 5, 5);
+    const nB = N('B', 22, 8, 5, 5);
+    const w1 = N('W1', 12, 1, 4, 6);
+    const w2 = N('W2', 12, 7, 4, 6);
+    const w3 = N('W3', 12, 13, 4, 6);
+    scenarios.push({
+      id: 'neg-wall',
+      title: 'Negotiated: Wall Obstacle',
+      nodes: [nA, nB, w1, w2, w3],
+      edges: [E(nA.id, nB.id)],
+    });
+  }
+
+  resetIds();
+  {
+    // Diagonal layout: A top-left, B bottom-right — facingSide picks 'right'
+    // but bottom/right combo may produce shorter diagonal path
+    const nA = N('A', 2, 2, 6, 6);
+    const nB = N('B', 22, 18, 6, 6);
+    scenarios.push({
+      id: 'neg-diagonal',
+      title: 'Negotiated: Diagonal',
+      nodes: [nA, nB],
+      edges: [E(nA.id, nB.id)],
+    });
+  }
+
+  resetIds();
+  {
+    // Hub with spokes in all directions — forces multiple side assignments
+    const hub = N('Hub', 14, 12, 7, 7);
+    const nN = N('N', 16, 1, 4, 4);
+    const nNE = N('NE', 28, 3, 4, 4);
+    const nE = N('E', 30, 13, 4, 4);
+    const nSE = N('SE', 28, 24, 4, 4);
+    const nS = N('S', 16, 26, 4, 4);
+    const nSW = N('SW', 3, 24, 4, 4);
+    const nW = N('W', 1, 13, 4, 4);
+    const nNW = N('NW', 3, 3, 4, 4);
+    scenarios.push({
+      id: 'neg-compass',
+      title: 'Negotiated: 8-Point Compass',
+      nodes: [hub, nN, nNE, nE, nSE, nS, nSW, nW, nNW],
+      edges: [
+        E(nN.id, hub.id), E(nNE.id, hub.id), E(nE.id, hub.id), E(nSE.id, hub.id),
+        E(nS.id, hub.id), E(nSW.id, hub.id), E(nW.id, hub.id), E(nNW.id, hub.id),
+      ],
+    });
+  }
+
+  resetIds();
+  {
+    // Congested side: 5 targets all on the right side of source — forces
+    // some connections to negotiate to top/bottom sides
+    const src = N('Src', 2, 12, 6, 8);
+    const t1 = N('T1', 22, 1, 4, 4);
+    const t2 = N('T2', 22, 7, 4, 4);
+    const t3 = N('T3', 22, 13, 4, 4);
+    const t4 = N('T4', 22, 19, 4, 4);
+    const t5 = N('T5', 22, 25, 4, 4);
+    scenarios.push({
+      id: 'neg-congested',
+      title: 'Negotiated: Congested Side (1→5)',
+      nodes: [src, t1, t2, t3, t4, t5],
+      edges: [E(src.id, t1.id), E(src.id, t2.id), E(src.id, t3.id), E(src.id, t4.id), E(src.id, t5.id)],
+    });
+  }
+
+  resetIds();
+  {
+    // Two nodes with obstacle forcing L-shaped path — tests that
+    // solver picks the side facing the gap, not the blocked side
+    const nA = N('A', 2, 2, 5, 5);
+    const nB = N('B', 2, 20, 5, 5);
+    const wall = N('Wall', 2, 10, 20, 4);
+    scenarios.push({
+      id: 'neg-l-shape',
+      title: 'Negotiated: L-Shape (obstacle between)',
+      nodes: [nA, nB, wall],
+      edges: [E(nA.id, nB.id)],
+    });
+  }
+
+  // Tier 8: 100-node mega-grid (10x10)
+  {
+    resetIds();
+    const GW = 10, GH = 10, NW = 4, NH = 4, GX = 8, GY = 8;
+    const grid: NodeDef[][] = [];
+    const allN: NodeDef[] = [];
+    for (let gy = 0; gy < GH; gy++) {
+      const row: NodeDef[] = [];
+      for (let gx = 0; gx < GW; gx++) {
+        const n = N(`${gy * GW + gx + 1}`, 2 + gx * (NW + GX), 2 + gy * (NH + GY), NW, NH);
+        row.push(n); allN.push(n);
+      }
+      grid.push(row);
+    }
+    const allE: EdgeDef[] = [];
+    for (let gy = 0; gy < GH; gy++) for (let gx = 0; gx < GW - 1; gx++) allE.push(E(grid[gy]![gx]!.id, grid[gy]![gx + 1]!.id));
+    for (let gy = 0; gy < GH - 1; gy++) for (let gx = 0; gx < GW; gx++) allE.push(E(grid[gy]![gx]!.id, grid[gy + 1]![gx]!.id));
+    for (let gy = 0; gy < GH - 1; gy += 2) for (let gx = 0; gx < GW - 1; gx += 2) allE.push(E(grid[gy]![gx]!.id, grid[gy + 1]![gx + 1]!.id));
+    allE.push(E(grid[0]![0]!.id, grid[9]![9]!.id));
+    allE.push(E(grid[0]![9]!.id, grid[9]![0]!.id));
+    allE.push(E(grid[0]![5]!.id, grid[9]![5]!.id));
+    allE.push(E(grid[5]![0]!.id, grid[5]![9]!.id));
+    allE.push(E(grid[2]![2]!.id, grid[7]![7]!.id));
+    allE.push(E(grid[2]![7]!.id, grid[7]![2]!.id));
+    scenarios.push({ id: 'mega-grid', title: `100 Nodes (${allN.length}N / ${allE.length}E)`, nodes: allN, edges: allE, padding: 3 });
+  }
+
+  // Tier 8: 50-node mind map with 25-connection HUB
+  {
+    resetIds();
+    const allN: NodeDef[] = [];
+    const allE: EdgeDef[] = [];
+    const hub = N('HUB', 50, 37, 21, 17); allN.push(hub);
+
+    // Cluster A — Planning
+    const a1 = N('Plan', 8, 6, 5, 4), a2 = N('Goals', 20, 4, 5, 4), a3 = N('Tasks', 20, 14, 5, 4), a4 = N('Sched', 8, 16, 5, 4), a5 = N('Deps', 34, 9, 5, 4);
+    allN.push(a1, a2, a3, a4, a5);
+    allE.push(E(a1.id, a2.id), E(a2.id, a3.id), E(a3.id, a4.id), E(a1.id, a4.id), E(a3.id, a5.id), E(a5.id, hub.id), E(a2.id, hub.id));
+
+    // Cluster B — Design
+    const b1 = N('UI', 88, 4, 5, 4), b2 = N('UX', 100, 10, 5, 4), b3 = N('Proto', 88, 18, 5, 4), b4 = N('Style', 78, 10, 5, 4);
+    allN.push(b1, b2, b3, b4);
+    allE.push(E(b1.id, b2.id), E(b2.id, b3.id), E(b4.id, b1.id), E(b4.id, b3.id), E(b4.id, hub.id), E(b1.id, hub.id));
+
+    // Cluster C — Data
+    const c1 = N('DB', 12, 62, 5, 4), c2 = N('Cache', 4, 74, 5, 4), c3 = N('Queue', 20, 74, 5, 4), c4 = N('ETL', 12, 84, 5, 4), c5 = N('Lake', 30, 68, 5, 4);
+    allN.push(c1, c2, c3, c4, c5);
+    allE.push(E(c1.id, c2.id), E(c1.id, c3.id), E(c2.id, c4.id), E(c3.id, c4.id), E(c3.id, c5.id), E(c1.id, hub.id), E(c5.id, hub.id));
+
+    // Cluster D — Infra
+    const d1 = N('K8s', 90, 70, 5, 4), d2 = N('CI', 104, 64, 5, 4), d3 = N('CD', 104, 78, 5, 4), d4 = N('Mon', 90, 84, 5, 4);
+    allN.push(d1, d2, d3, d4);
+    allE.push(E(d1.id, d2.id), E(d2.id, d3.id), E(d3.id, d4.id), E(d1.id, d4.id), E(d1.id, hub.id), E(d2.id, hub.id));
+
+    // Cluster E — API
+    const e1 = N('REST', 112, 36, 5, 4), e2 = N('GQL', 112, 48, 5, 4), e3 = N('gRPC', 100, 42, 5, 4);
+    allN.push(e1, e2, e3);
+    allE.push(E(e1.id, e2.id), E(e2.id, e3.id), E(e3.id, e1.id), E(e3.id, hub.id));
+
+    // Islands
+    const i1a = N('Docs', 52, 4, 5, 4), i1b = N('Wiki', 64, 4, 5, 4);
+    allN.push(i1a, i1b);
+    allE.push(E(i1a.id, i1b.id), E(i1a.id, hub.id));
+
+    const i2a = N('Auth', 48, 82, 5, 4), i2b = N('SSO', 60, 86, 5, 4), i2c = N('RBAC', 72, 82, 5, 4);
+    allN.push(i2a, i2b, i2c);
+    allE.push(E(i2a.id, i2b.id), E(i2b.id, i2c.id), E(i2a.id, hub.id), E(i2c.id, hub.id));
+
+    // Scattered singles → hub
+    const scattered: [string, number, number][] = [
+      ['Log', 36, 20], ['Trace', 42, 26], ['Metr', 76, 20], ['Alert', 84, 26],
+      ['Slack', 34, 42], ['Email', 34, 58], ['Notif', 84, 42], ['Audit', 84, 58],
+      ['Sec', 48, 16], ['Perf', 70, 16], ['Test', 48, 62], ['Lint', 70, 62], ['Build', 36, 32],
+    ];
+    for (const [label, col, row] of scattered) { const n = N(label, col, row, 5, 4); allN.push(n); allE.push(E(n.id, hub.id)); }
+
+    // Cross-cluster links
+    allE.push(E(a3.id, c1.id), E(b3.id, e1.id), E(d2.id, e1.id), E(c5.id, d1.id), E(i2c.id, e3.id));
+
+    scenarios.push({ id: 'mindmap', title: `Mind Map (${allN.length}N / ${allE.length}E)`, nodes: allN, edges: allE, padding: 3 });
+  }
+
   return scenarios;
 }
 

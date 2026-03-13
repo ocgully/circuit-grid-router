@@ -176,6 +176,26 @@ Sequential chain of four nodes.
 
 ![Chain](docs/images/chain.svg)
 
+### Connection Negotiation: Wall Obstacle
+An obstacle wall blocks the direct horizontal path between A and B. The solver evaluates the initial poor path (>2× Manhattan distance) and tries alternative connection sides, rerouting through an available gap.
+
+![Negotiated Wall](docs/images/neg-wall.svg)
+
+### Connection Negotiation: 8-Point Compass
+A central hub with 8 spokes at cardinal and intercardinal positions. The solver must assign connections to all 4 sides of the hub, negotiating which diagonal nodes connect via which side for optimal path lengths.
+
+![Negotiated Compass](docs/images/neg-compass.svg)
+
+### Connection Negotiation: Congested Side (1→5)
+One source node with 5 targets all to the right. Rather than cramming all connections onto the right side, the solver may negotiate top/bottom exits for the outermost targets.
+
+![Negotiated Congested](docs/images/neg-congested.svg)
+
+### Connection Negotiation: L-Shape
+Two vertically aligned nodes separated by a wide wall. `facingSide` would pick bottom/top, but those paths are blocked. The solver negotiates right-side connections to route an L-shaped path around the obstacle.
+
+![Negotiated L-Shape](docs/images/neg-l-shape.svg)
+
 ### Mind Map (50 Nodes)
 A central hub with 25 direct connections, surrounded by satellite clusters. Demonstrates connection distribution under heavy load and negotiated routing at scale.
 

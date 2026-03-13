@@ -186,6 +186,53 @@ function buildAll() {
   const t6 = [{ id:'dist-3', title:'3-Edge Distribution', desc:'Center + pair with gaps', nodes:[dA,dB1,dB2,dB3], edges:[E(dA.id,dB1.id),E(dA.id,dB2.id),E(dA.id,dB3.id)] }];
   tiers.push({ name: 'Tier 6: Edge Distribution', scenarios: t6 });
 
+  // Tier 7: Connection Negotiation
+  const t7 = [];
+
+  resetIds();
+  {
+    const nA = N('A',2,8,5,5), nB = N('B',22,8,5,5);
+    const w1 = N('W1',12,1,4,6), w2 = N('W2',12,7,4,6), w3 = N('W3',12,13,4,6);
+    t7.push({ id:'neg-wall', title:'Wall Obstacle', desc:'Obstacle wall blocks direct path — solver reroutes via alternative side', nodes:[nA,nB,w1,w2,w3], edges:[E(nA.id,nB.id)] });
+  }
+
+  resetIds();
+  {
+    const nA = N('A',2,2,6,6), nB = N('B',22,18,6,6);
+    t7.push({ id:'neg-diagonal', title:'Diagonal', desc:'45° layout — solver may pick bottom/right over default right/left', nodes:[nA,nB], edges:[E(nA.id,nB.id)] });
+  }
+
+  resetIds();
+  {
+    const hub2 = N('Hub',14,12,7,7);
+    const nN2 = N('N',16,1,4,4), nNE2 = N('NE',28,3,4,4), nE2 = N('E',30,13,4,4), nSE2 = N('SE',28,24,4,4);
+    const nS2 = N('S',16,26,4,4), nSW2 = N('SW',3,24,4,4), nW2 = N('W',1,13,4,4), nNW2 = N('NW',3,3,4,4);
+    t7.push({
+      id:'neg-compass', title:'8-Point Compass', desc:'Hub with 8 spokes — forces all 4 sides to be used',
+      nodes:[hub2,nN2,nNE2,nE2,nSE2,nS2,nSW2,nW2,nNW2],
+      edges:[E(nN2.id,hub2.id),E(nNE2.id,hub2.id),E(nE2.id,hub2.id),E(nSE2.id,hub2.id),E(nS2.id,hub2.id),E(nSW2.id,hub2.id),E(nW2.id,hub2.id),E(nNW2.id,hub2.id)],
+    });
+  }
+
+  resetIds();
+  {
+    const src2 = N('Src',2,12,6,8);
+    const t1b = N('T1',22,1,4,4), t2b = N('T2',22,7,4,4), t3b = N('T3',22,13,4,4), t4b = N('T4',22,19,4,4), t5b = N('T5',22,25,4,4);
+    t7.push({
+      id:'neg-congested', title:'Congested Side (1→5)', desc:'5 targets on same side — negotiation spreads connections',
+      nodes:[src2,t1b,t2b,t3b,t4b,t5b],
+      edges:[E(src2.id,t1b.id),E(src2.id,t2b.id),E(src2.id,t3b.id),E(src2.id,t4b.id),E(src2.id,t5b.id)],
+    });
+  }
+
+  resetIds();
+  {
+    const nA2 = N('A',2,2,5,5), nB2 = N('B',2,20,5,5), wall2 = N('Wall',2,10,20,4);
+    t7.push({ id:'neg-l-shape', title:'L-Shape Obstacle', desc:'Wall between vertical nodes — forces L-shaped path via side negotiation', nodes:[nA2,nB2,wall2], edges:[E(nA2.id,nB2.id)] });
+  }
+
+  tiers.push({ name: 'Tier 7: Connection Negotiation', scenarios: t7 });
+
   return tiers;
 }
 
