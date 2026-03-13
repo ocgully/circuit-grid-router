@@ -533,11 +533,23 @@ function placeConnectionState(grid, connections, edges) {
     return connByEdge;
 }
 /** Path quality threshold: paths longer than this ratio vs Manhattan are candidates for side reassignment. */
-const PATH_QUALITY_THRESHOLD = 2.0;
+const PATH_QUALITY_THRESHOLD = 1.6;
+/** If any alternative side pair has Manhattan distance this much shorter, try it regardless of path quality. */
+const ALT_MANHATTAN_RATIO = 0.7;
 /** Iterations after which to attempt side reassignment. */
 const REASSIGN_AFTER_ITERATIONS = [0, 3];
 /**
  * Evaluate routed paths and try alternative side assignments for poor ones.
+ *
+ * Triggers on two conditions (either is enough):
+ * (a) Current path length > PATH_QUALITY_THRESHOLD × current Manhattan distance
+ * (b) An alternative side pair has Manhattan distance < ALT_MANHATTAN_RATIO × current Manhattan
+ *
+ * Condition (b) catches the common case where facingSide picks a horizontal
+ * side for nearly-vertical node pairs (tiny x offset, large y distance) —
+ * the path isn't "bad" relative to the horizontal Manhattan, but a vertical
+ * side pair would be dramatically shorter.
+ *
  * Returns true if any assignment changed.
  */
 function negotiateSides(nodes, edges, paths, sideAssignments, grid, dirs, cong, iteration) {
@@ -561,11 +573,32 @@ function negotiateSides(nodes, edges, paths, sideAssignments, grid, dirs, cong, 
         const tgtPos = sideCenterPosition(tgt, assignment.tgtSide);
         const ideal = manhattan(srcPos.col, srcPos.row, tgtPos.col, tgtPos.row);
         const actual = path.cells.length;
-        if (ideal < 2 || actual <= ideal * PATH_QUALITY_THRESHOLD)
-            continue;
         // Generate candidate side pairs: current + perpendicular alternatives
         const srcCandidates = [assignment.srcSide, ...alternativeSides(assignment.srcSide)];
         const tgtCandidates = [assignment.tgtSide, ...alternativeSides(assignment.tgtSide)];
+        // Condition (a): current path is poor relative to its own Manhattan
+        const pathIsPoor = ideal >= 2 && actual > ideal * PATH_QUALITY_THRESHOLD;
+        // Condition (b): any alternative side pair has much shorter Manhattan
+        let altHasShorterManhattan = false;
+        if (ideal >= 2) {
+            for (const ss of srcCandidates) {
+                for (const ts of tgtCandidates) {
+                    if (ss === assignment.srcSide && ts === assignment.tgtSide)
+                        continue;
+                    const sP = sideCenterPosition(src, ss);
+                    const tP = sideCenterPosition(tgt, ts);
+                    const altDist = manhattan(sP.col, sP.row, tP.col, tP.row);
+                    if (altDist < ideal * ALT_MANHATTAN_RATIO) {
+                        altHasShorterManhattan = true;
+                        break;
+                    }
+                }
+                if (altHasShorterManhattan)
+                    break;
+            }
+        }
+        if (!pathIsPoor && !altHasShorterManhattan)
+            continue;
         let bestLen = actual;
         let bestSrcSide = assignment.srcSide;
         let bestTgtSide = assignment.tgtSide;
