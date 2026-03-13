@@ -568,15 +568,62 @@ function clearConnectionState(grid: Grid2D): void {
 }
 
 /** Place connections on the grid and block corridors. Returns edge→endpoint lookup. */
+/**
+ * Try to place a connection point. If the target cell is occupied (e.g. by
+ * an overlapping node), slide along the node's side to find the nearest free
+ * cell. Returns the adjusted (col, row) or null if no free cell exists.
+ */
+function adjustConnectionPosition(
+  grid: Grid2D,
+  cp: ConnectionPoint,
+): { col: number; row: number } | null {
+  const cell = getCell(grid, cp.col, cp.row);
+  if (cell && (cell.type === 'empty' || cell.type === 'connection')) {
+    return { col: cp.col, row: cp.row };
+  }
+
+  // Slide along the side axis to find a free cell
+  const isHorizontal = cp.side === 'left' || cp.side === 'right';
+  for (let offset = 1; offset <= 10; offset++) {
+    for (const sign of [1, -1]) {
+      const nc = isHorizontal ? cp.col : cp.col + sign * offset;
+      const nr = isHorizontal ? cp.row + sign * offset : cp.row;
+      const adj = getCell(grid, nc, nr);
+      if (adj && (adj.type === 'empty' || adj.type === 'connection')) {
+        return { col: nc, row: nr };
+      }
+    }
+  }
+
+  // Try one cell further out from the node as last resort
+  const outDc = cp.side === 'right' ? 1 : cp.side === 'left' ? -1 : 0;
+  const outDr = cp.side === 'bottom' ? 1 : cp.side === 'top' ? -1 : 0;
+  for (let dist = 1; dist <= 3; dist++) {
+    const nc = cp.col + outDc * dist;
+    const nr = cp.row + outDr * dist;
+    const adj = getCell(grid, nc, nr);
+    if (adj && (adj.type === 'empty' || adj.type === 'connection')) {
+      return { col: nc, row: nr };
+    }
+  }
+
+  return null;
+}
+
 function placeConnectionState(
   grid: Grid2D,
   connections: ConnectionPoint[],
   edges: EdgeDef[],
 ): Map<number, { src: ConnectionPoint | null; tgt: ConnectionPoint | null }> {
   for (const cp of connections) {
-    const cell = getCell(grid, cp.col, cp.row);
-    if (cell && cell.type === 'empty') {
-      setCell(grid, cp.col, cp.row, 'connection', cp.nodeId);
+    const adjusted = adjustConnectionPosition(grid, cp);
+    if (adjusted) {
+      cp.col = adjusted.col;
+      cp.row = adjusted.row;
+      const cell = getCell(grid, cp.col, cp.row);
+      if (cell && cell.type === 'empty') {
+        setCell(grid, cp.col, cp.row, 'connection', cp.nodeId);
+      }
     }
   }
   blockConnectionCorridors(grid, connections);

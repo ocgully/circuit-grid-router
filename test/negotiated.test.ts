@@ -88,6 +88,61 @@ describe('buildScenarioNegotiated', () => {
     expect(path!.cells.length).toBeGreaterThan(0);
   });
 
+  it('handles overlapping nodes — adjusts connection points', () => {
+    // Two nodes that overlap by 2 cells in grid space
+    const nodes: NodeDef[] = [
+      { id: 1, label: 'A', col: 2, row: 2, w: 6, h: 5 },
+      { id: 2, label: 'B', col: 6, row: 2, w: 6, h: 5 }, // overlaps A by 2 cols
+    ];
+    const edges: EdgeDef[] = [{ id: 1, source: 1, target: 2 }];
+    const result = buildScenarioNegotiated(nodes, edges);
+
+    // Should still produce connections (adjusted away from overlap)
+    expect(result.connections.length).toBeGreaterThanOrEqual(2);
+    // Should attempt to route (may or may not succeed depending on space)
+    // The key: it shouldn't crash or hang
+  });
+
+  it('handles adjacent nodes with no gap', () => {
+    // Two nodes directly adjacent — connection points land on each other
+    const nodes: NodeDef[] = [
+      { id: 1, label: 'A', col: 2, row: 2, w: 5, h: 5 },
+      { id: 2, label: 'B', col: 7, row: 2, w: 5, h: 5 }, // A ends at col 7, B starts at col 7
+    ];
+    const edges: EdgeDef[] = [{ id: 1, source: 1, target: 2 }];
+    const result = buildScenarioNegotiated(nodes, edges);
+
+    // Connections should exist and be adjusted
+    expect(result.connections.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('handles partially overlapping nodes vertically', () => {
+    // Nodes overlap vertically — connection on shared side lands on other node
+    const nodes: NodeDef[] = [
+      { id: 1, label: 'A', col: 2, row: 2, w: 5, h: 8 },
+      { id: 2, label: 'B', col: 5, row: 6, w: 5, h: 8 }, // overlaps A horizontally and vertically
+    ];
+    const edges: EdgeDef[] = [{ id: 1, source: 1, target: 2 }];
+    const result = buildScenarioNegotiated(nodes, edges);
+
+    // Should not crash, connections should be adjusted
+    expect(result.connections.length).toBeGreaterThanOrEqual(2);
+    // If a path was found, it shouldn't pass through node cells
+    const path = result.paths?.get(1);
+    if (path) {
+      for (const cell of path.cells) {
+        const gc = getCell(result.grid, cell.col, cell.row);
+        if (gc?.type === 'node') {
+          // Only allowed at first/last cell (connection adjacent to node)
+          const isEndpoint = cell === path.cells[0] || cell === path.cells[path.cells.length - 1];
+          if (!isEndpoint) {
+            expect(gc.type).not.toBe('node');
+          }
+        }
+      }
+    }
+  });
+
   it('converges within iteration limit', () => {
     const nodes: NodeDef[] = [
       { id: 1, label: 'A', col: 2, row: 2, w: 4, h: 4 },
