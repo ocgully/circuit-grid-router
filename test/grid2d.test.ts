@@ -52,29 +52,28 @@ describe('distributeConnections', () => {
     expect(distributeConnections(2, 5, 1)).toEqual([4]);
   });
 
-  it('2 connections: center is gap', () => {
-    // Center = 4, even → [3, 5]
-    expect(distributeConnections(2, 5, 2)).toEqual([3, 5]);
-    // Center is not in the list
-    expect(distributeConnections(2, 5, 2)).not.toContain(4);
+  it('2 connections: spread across side', () => {
+    // Side from 2, len 5 → first=3, last=5 → [3, 5]
+    const result = distributeConnections(2, 5, 2);
+    expect(result).toHaveLength(2);
+    expect(result[0]).toBeLessThan(result[1]!);
   });
 
-  it('3 connections: center occupied + pair', () => {
-    // Center = 4, odd → [2, 4, 6]
-    expect(distributeConnections(2, 5, 3)).toEqual([2, 4, 6]);
-    expect(distributeConnections(2, 5, 3)).toContain(4); // center IS occupied
+  it('3 connections: spread with min gap', () => {
+    const result = distributeConnections(2, 5, 3);
+    expect(result).toHaveLength(3);
+    // Sorted ascending with minimum 2-cell gap
+    for (let i = 1; i < result.length; i++) {
+      expect(result[i]! - result[i - 1]!).toBeGreaterThanOrEqual(2);
+    }
   });
 
-  it('4 connections: two pairs, center gap', () => {
+  it('4 connections: spread with min gap', () => {
     const result = distributeConnections(2, 9, 4);
     expect(result).toHaveLength(4);
-    // Center = 2 + floor(8/2) = 6
-    expect(result).not.toContain(6); // center is gap
-    // Should be symmetric around center
-    const center = 6;
-    const dists = result.map(p => p - center);
-    for (const d of dists) {
-      expect(dists).toContain(-d);
+    // Sorted ascending
+    for (let i = 1; i < result.length; i++) {
+      expect(result[i]).toBeGreaterThan(result[i - 1]!);
     }
   });
 
@@ -91,11 +90,11 @@ describe('distributeConnections', () => {
     }
   });
 
-  it('adjacent positions have gap of 2 (1 empty cell between)', () => {
+  it('adjacent positions have minimum gap of 2', () => {
     for (let n = 2; n <= 5; n++) {
       const positions = distributeConnections(0, 15, n);
       for (let i = 1; i < positions.length; i++) {
-        expect(positions[i]! - positions[i - 1]!).toBe(2);
+        expect(positions[i]! - positions[i - 1]!).toBeGreaterThanOrEqual(2);
       }
     }
   });

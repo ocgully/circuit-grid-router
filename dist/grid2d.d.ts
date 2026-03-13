@@ -82,9 +82,13 @@ export declare function createGrid(cols: number, rows: number): Grid2D;
 export declare function getCell(grid: Grid2D, col: number, row: number): GridCell | null;
 export declare function setCell(grid: Grid2D, col: number, row: number, type: CellType, id: number): void;
 /**
- * Distribute `count` connection points along a side.
- * - Odd: center occupied, pairs outward with 1-cell gaps
- * - Even: center is gap, pairs outward
+ * Distribute `count` connection points evenly along a node side.
+ *
+ * - 1 connection: centered on the side.
+ * - 2+ connections: spread proportionally across the side with 1-cell margins
+ *   on each end and a minimum 2-cell gap between positions. This places each
+ *   connection close to its corresponding target (when entries are sorted by
+ *   target position), minimizing path lengths and avoiding unnecessary crossings.
  *
  * Returns sorted positions in grid coordinates.
  */

@@ -65,36 +65,50 @@ function facingSide(a, b) {
     return dy >= 0 ? 'bottom' : 'top';
 }
 // ---------------------------------------------------------------------------
-// Connection point distribution (center-biased with empty gaps)
+// Connection point distribution (proportional spread)
 // ---------------------------------------------------------------------------
 /**
- * Distribute `count` connection points along a side.
- * - Odd: center occupied, pairs outward with 1-cell gaps
- * - Even: center is gap, pairs outward
+ * Distribute `count` connection points evenly along a node side.
+ *
+ * - 1 connection: centered on the side.
+ * - 2+ connections: spread proportionally across the side with 1-cell margins
+ *   on each end and a minimum 2-cell gap between positions. This places each
+ *   connection close to its corresponding target (when entries are sorted by
+ *   target position), minimizing path lengths and avoiding unnecessary crossings.
  *
  * Returns sorted positions in grid coordinates.
  */
 export function distributeConnections(sideStart, sideLength, count) {
     if (count === 0)
         return [];
-    const center = sideStart + Math.floor((sideLength - 1) / 2);
     if (count === 1)
-        return [center];
+        return [sideStart + Math.floor((sideLength - 1) / 2)];
+    // Spread evenly across the side with 1-cell margin on each end
+    const margin = 1;
+    const first = sideStart + margin;
+    const last = sideStart + sideLength - 1 - margin;
+    const span = last - first;
+    if (span <= 0 || count > sideLength) {
+        // Side too small — fall back to tight center-biased packing
+        const center = sideStart + Math.floor((sideLength - 1) / 2);
+        const positions = [];
+        for (let i = 0; i < count; i++) {
+            positions.push(center - Math.floor(count / 2) + i);
+        }
+        return positions;
+    }
     const positions = [];
-    if (count % 2 === 1) {
-        positions.push(center);
-        for (let k = 1; k <= Math.floor(count / 2); k++) {
-            positions.push(center - k * 2);
-            positions.push(center + k * 2);
+    for (let i = 0; i < count; i++) {
+        const t = count === 1 ? 0.5 : i / (count - 1);
+        positions.push(first + Math.round(t * span));
+    }
+    // Enforce minimum 2-cell gap between adjacent positions
+    for (let i = 1; i < positions.length; i++) {
+        if (positions[i] - positions[i - 1] < 2) {
+            positions[i] = positions[i - 1] + 2;
         }
     }
-    else {
-        for (let k = 0; k < count / 2; k++) {
-            positions.push(center - (k * 2 + 1));
-            positions.push(center + (k * 2 + 1));
-        }
-    }
-    return positions.sort((a, b) => a - b);
+    return positions;
 }
 // ---------------------------------------------------------------------------
 // Connection point computation for all edges
