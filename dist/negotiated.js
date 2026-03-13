@@ -215,7 +215,7 @@ const HISTORY_INCREMENT = 4;
  * Negotiated A*: like the standard A* but uses congestion costs instead of
  * hard-blocking overlaps. Overlaps are allowed but expensive.
  */
-function negotiatedAstar(grid, sc, sr, sourceSide, tc, tr, targetSide, dirs, cong, iteration, edgeId) {
+function negotiatedAstar(grid, sc, sr, sourceSide, tc, tr, targetSide, dirs, cong, iteration, edgeId, maxItersOverride) {
     const stateKey = (c, r, d) => {
         const di = d === null ? 0 : d === 'h' ? 1 : d === 'v' ? 2 : 3;
         return r * grid.cols * 4 + c * 4 + di;
@@ -237,7 +237,7 @@ function negotiatedAstar(grid, sc, sr, sourceSide, tc, tr, targetSide, dirs, con
     gCosts.set(stateKey(sc, sr, null), 0);
     let found = null;
     let iters = 0;
-    const MAX_ITERS = grid.cols * grid.rows * 8;
+    const MAX_ITERS = maxItersOverride ?? grid.cols * grid.rows * 8;
     while (open.length > 0 && iters < MAX_ITERS) {
         iters++;
         open.sort((a, b) => a.f - b.f);
@@ -400,12 +400,6 @@ function clearEdgeCells(grid, dirs) {
     dirs.v.clear();
     dirs.d.clear();
 }
-/** Get the perpendicular alternative sides for a given side. */
-function alternativeSides(current) {
-    if (current === 'left' || current === 'right')
-        return ['top', 'bottom'];
-    return ['left', 'right'];
-}
 /** Get the center connection position for a node on a given side. */
 function sideCenterPosition(node, side) {
     switch (side) {
@@ -414,10 +408,6 @@ function sideCenterPosition(node, side) {
         case 'bottom': return { col: node.col + Math.floor((node.w - 1) / 2), row: node.row + node.h };
         case 'top': return { col: node.col + Math.floor((node.w - 1) / 2), row: node.row - 1 };
     }
-}
-/** Manhattan distance between two grid points. */
-function manhattan(c1, r1, c2, r2) {
-    return Math.abs(c2 - c1) + Math.abs(r2 - r1);
 }
 /**
  * Compute connections using explicit side assignments (instead of facingSide).
@@ -532,23 +522,25 @@ function placeConnectionState(grid, connections, edges) {
     }
     return connByEdge;
 }
-/** Path quality threshold: paths longer than this ratio vs Manhattan are candidates for side reassignment. */
-const PATH_QUALITY_THRESHOLD = 1.6;
-/** If any alternative side pair has Manhattan distance this much shorter, try it regardless of path quality. */
-const ALT_MANHATTAN_RATIO = 0.7;
 /** Iterations after which to attempt side reassignment. */
 const REASSIGN_AFTER_ITERATIONS = [0, 3];
+/** All four sides, used for exhaustive trial routing. */
+const ALL_SIDES = ['top', 'bottom', 'left', 'right'];
 /**
- * Evaluate routed paths and try alternative side assignments for poor ones.
+ * A* iteration budget for trial routes. Trial routes are probes to compare
+ * side pairs — they don't need to find the globally optimal path, just a
+ * reasonable one for length comparison. A tight budget keeps this fast even
+ * for large grids (100+ nodes).
+ */
+const TRIAL_MAX_ITERS = 2000;
+/**
+ * For every edge, try all viable side pairs by actually routing each one.
+ * No heuristics — the only way to know which side pair is best is to run
+ * A* with real obstacles, congestion, and grid state.
  *
- * Triggers on two conditions (either is enough):
- * (a) Current path length > PATH_QUALITY_THRESHOLD × current Manhattan distance
- * (b) An alternative side pair has Manhattan distance < ALT_MANHATTAN_RATIO × current Manhattan
- *
- * Condition (b) catches the common case where facingSide picks a horizontal
- * side for nearly-vertical node pairs (tiny x offset, large y distance) —
- * the path isn't "bad" relative to the horizontal Manhattan, but a vertical
- * side pair would be dramatically shorter.
+ * Trial routes use a capped iteration budget (TRIAL_MAX_ITERS) so probing
+ * stays fast. If a trial exceeds the budget, it returns null (no path found
+ * within budget) and that side pair is skipped.
  *
  * Returns true if any assignment changed.
  */
@@ -568,42 +560,13 @@ function negotiateSides(nodes, edges, paths, sideAssignments, grid, dirs, cong, 
         const tgt = nodeMap.get(e.target);
         if (!src || !tgt)
             continue;
-        // Current endpoint positions (center of assigned side)
-        const srcPos = sideCenterPosition(src, assignment.srcSide);
-        const tgtPos = sideCenterPosition(tgt, assignment.tgtSide);
-        const ideal = manhattan(srcPos.col, srcPos.row, tgtPos.col, tgtPos.row);
         const actual = path.cells.length;
-        // Generate candidate side pairs: current + perpendicular alternatives
-        const srcCandidates = [assignment.srcSide, ...alternativeSides(assignment.srcSide)];
-        const tgtCandidates = [assignment.tgtSide, ...alternativeSides(assignment.tgtSide)];
-        // Condition (a): current path is poor relative to its own Manhattan
-        const pathIsPoor = ideal >= 2 && actual > ideal * PATH_QUALITY_THRESHOLD;
-        // Condition (b): any alternative side pair has much shorter Manhattan
-        let altHasShorterManhattan = false;
-        if (ideal >= 2) {
-            for (const ss of srcCandidates) {
-                for (const ts of tgtCandidates) {
-                    if (ss === assignment.srcSide && ts === assignment.tgtSide)
-                        continue;
-                    const sP = sideCenterPosition(src, ss);
-                    const tP = sideCenterPosition(tgt, ts);
-                    const altDist = manhattan(sP.col, sP.row, tP.col, tP.row);
-                    if (altDist < ideal * ALT_MANHATTAN_RATIO) {
-                        altHasShorterManhattan = true;
-                        break;
-                    }
-                }
-                if (altHasShorterManhattan)
-                    break;
-            }
-        }
-        if (!pathIsPoor && !altHasShorterManhattan)
-            continue;
         let bestLen = actual;
         let bestSrcSide = assignment.srcSide;
         let bestTgtSide = assignment.tgtSide;
-        for (const ss of srcCandidates) {
-            for (const ts of tgtCandidates) {
+        // Try every side pair
+        for (const ss of ALL_SIDES) {
+            for (const ts of ALL_SIDES) {
                 if (ss === assignment.srcSide && ts === assignment.tgtSide)
                     continue;
                 const sPos = sideCenterPosition(src, ss);
@@ -613,18 +576,19 @@ function negotiateSides(nodes, edges, paths, sideAssignments, grid, dirs, cong, 
                     continue;
                 if (tPos.col < 0 || tPos.col >= grid.cols || tPos.row < 0 || tPos.row >= grid.rows)
                     continue;
-                // Temporarily ensure candidate cells are accessible
+                // Skip if endpoint lands on a node cell
                 const sCellOrig = getCell(grid, sPos.col, sPos.row);
                 const tCellOrig = getCell(grid, tPos.col, tPos.row);
                 if (sCellOrig?.type === 'node' || tCellOrig?.type === 'node')
                     continue;
+                // Temporarily unblock candidate cells for trial
                 const sWasBlocked = sCellOrig?.type === 'blocked';
                 const tWasBlocked = tCellOrig?.type === 'blocked';
                 if (sWasBlocked)
                     setCell(grid, sPos.col, sPos.row, 'empty', 0);
                 if (tWasBlocked)
                     setCell(grid, tPos.col, tPos.row, 'empty', 0);
-                const trial = negotiatedAstar(grid, sPos.col, sPos.row, ss, tPos.col, tPos.row, ts, dirs, cong, iteration, e.id);
+                const trial = negotiatedAstar(grid, sPos.col, sPos.row, ss, tPos.col, tPos.row, ts, dirs, cong, iteration, e.id, TRIAL_MAX_ITERS);
                 // Restore
                 if (sWasBlocked)
                     setCell(grid, sPos.col, sPos.row, 'blocked', 0);
